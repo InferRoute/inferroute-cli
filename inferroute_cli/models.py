@@ -22,6 +22,12 @@ class ModelAlias:
 
 
 # Order matters — `ir choose` shows them top-to-bottom.
+# NOTE: `minimax` currently points to the multi-model router because the
+# direct `minimax/...` paths have a provider-mapping bug on the proxy
+# (chutes matches MiniMaxAI/* patterns, not minimax/*; needs a normalizer
+# pass). Router-routed requests get MiniMax M2.5 anyway for tier-2 tasks,
+# so this is a transparent workaround. Revert to `minimax/minimax-m2.5`
+# once the backend mapping is fixed.
 ALIASES: list[ModelAlias] = [
     ModelAlias(
         short="auto",
@@ -31,7 +37,7 @@ ALIASES: list[ModelAlias] = [
     ),
     ModelAlias(
         short="minimax",
-        model_id="minimax/minimax-m2.5",
+        model_id="multi-model",  # TODO: revert to "minimax/minimax-m2.5" once backend mapping fixed
         label="MiniMax M2.5 — fast, cheap, great for most coding",
         tier="fast",
     ),
