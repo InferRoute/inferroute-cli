@@ -68,6 +68,12 @@ sends to whatever upstream is on you.
 `ir anthropic` is literally `exec claude` plus one flag — the inferroute
 service sees nothing.
 
+## Source
+
+https://github.com/InferRoute/inferroute-cli
+
+Issues / feature requests / PRs welcome.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

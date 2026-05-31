@@ -29,7 +29,8 @@ ir = "inferroute_cli.main:main"
 
 [project.urls]
 Homepage = "https://inferroute.ai"
-Source = "https://github.com/henrydeclety/inferroute-cli"
+Source = "https://github.com/InferRoute/inferroute-cli"
+Issues = "https://github.com/InferRoute/inferroute-cli/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["inferroute_cli"]
