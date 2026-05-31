@@ -31,12 +31,12 @@ ALIASES: list[ModelAlias] = [
     ),
     ModelAlias(
         short="minimax",
-        # Routes via the user's MiniMax Token Plan subscription (Anthropic-
-        # compat endpoint at api.minimax.io/anthropic). Chutes M2.5 is the
-        # fallback when the 5h rolling quota is hit. See cc-proxy-prod
-        # model_config.yaml minimax_direct/MiniMax-M2.7 entry.
-        model_id="minimax_direct/MiniMax-M2.7",
-        label="MiniMax M2.7 — direct sub, native Anthropic endpoint",
+        # Pass the short name so Claude Code displays "MiniMax-M2.7" in the
+        # session header instead of revealing "minimax_direct/…". Proxy
+        # has a top-level `MiniMax-M2.7` model entry that routes to the
+        # MiniMax Token Plan sub (api.minimax.io/anthropic).
+        model_id="MiniMax-M2.7",
+        label="MiniMax M2.7",
         tier="fast",
     ),
     ModelAlias(
