@@ -31,8 +31,12 @@ ALIASES: list[ModelAlias] = [
     ),
     ModelAlias(
         short="minimax",
-        model_id="minimax/minimax-m2.5",
-        label="MiniMax M2.5 — fast, cheap, great for most coding",
+        # Routes via the user's MiniMax Token Plan subscription (Anthropic-
+        # compat endpoint at api.minimax.io/anthropic). Chutes M2.5 is the
+        # fallback when the 5h rolling quota is hit. See cc-proxy-prod
+        # model_config.yaml minimax_direct/MiniMax-M2.7 entry.
+        model_id="minimax_direct/MiniMax-M2.7",
+        label="MiniMax M2.7 — direct sub, native Anthropic endpoint",
         tier="fast",
     ),
     ModelAlias(
