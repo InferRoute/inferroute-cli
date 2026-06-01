@@ -25,35 +25,39 @@ def _build_prompt(api_url: str) -> str:
     URL; the agent reads the API key from the user's existing inferroute creds /
     env — we never paste the secret into the prompt."""
     return f"""\
-Wire THIS repo's autonomous-agent loop to inferroute's economy lane (cheap off-peak runs).
-You're in plan mode: research, then present ONE concise plan and stop. Be minimal and concrete.
-
-EFFICIENCY: this is a tiny task — grep + read a couple of files DIRECTLY. Do NOT spawn Explore
-or Task subagents; do NOT read the whole repo. Find the loop driver, read just it, then plan.
+Wire THIS repo's autonomous-agent loop (if it has one) to inferroute's economy lane (cheap
+off-peak runs). You're in plan mode: research, then present ONE concise plan and stop. Be
+minimal and concrete.
 
 The `ir` CLI is installed (you were launched via it). Use it directly; do NOT read inferroute's
 source. For RESEARCH you may ONLY run: `ir help`, `ir gate`, `ir gate --print-env`. NEVER run
-bare `ir` or `ir --model …` — those LAUNCH a Claude session (a nested agent); they belong in the
-loop you're editing, not in your research. Two commands do everything:
-  • `ir gate`            → exit 0 = cheap window now, 1 = skip. Gates one cycle (like pace-gate).
-  • `IR_LANE=economy ir` → launches Claude Code on the economy lane; inferroute auto-routes the
-                          model per turn. This REPLACES a `claude --model …` call — the native
-                          models (opus/sonnet) do NOT exist on the economy backend, so DROP the
-                          `--model` pin and let `ir` auto-route. Keep flags like --effort. For a
-                          specific tier use `IR_LANE=economy ir --model kimi` (or glm).
+bare `ir` or `ir --model …` — those LAUNCH an agent session (a nested agent); they belong in the
+loop you edit, not your research. Two ir commands do everything:
+  • `ir gate`        → exit 0 = cheap window now, 1 = skip. Gates one cycle.
+  • `ir --economy`   → launches an agent on the economy lane; inferroute auto-routes the model
+                      per turn and sets ANTHROPIC_BASE_URL/token itself. Use it to REPLACE however
+                      the loop launches its agent today. If it pins a model (e.g. `--model <name>`),
+                      DROP the pin (pinned native models aren't on the economy backend) and let `ir`
+                      route; keep flags like --effort. For a specific tier: `ir --economy --model kimi`
+                      (or glm). (`ir --economy` == the `IR_LANE=economy ir …` env form, but cleaner.)
 
 Plan to:
-1. Find the loop's driver (run-loop.sh / while-true / cron / systemd / pace-gate line) and how it
-   invokes the model today (e.g. `claude --model opus --effort X …`, possibly behind an `env …` prefix).
-2. Gate each cycle: `if ir gate; then <cycle>; else sleep 30; fi` (compose with any existing
-   pace-gate: `pace-gate && ir gate && <cycle>`). If the loop runs under systemd/cron with a
-   stripped PATH, use ir's absolute path (`command -v ir`).
-3. Make the cycle run economy: replace its model invocation with `IR_LANE=economy ir --effort X …`
-   (bare `ir` auto-routes; or per-role `IR_LANE=economy ir --model kimi`/`glm` only if the loop
-   clearly separates roles). Drop the native `--model opus/sonnet` pin and any hand-rolled
-   ANTHROPIC_BASE_URL/token env — `ir` handles all of it.
+1. Find the loop: a recurring, UNATTENDED driver that repeatedly invokes an LLM-agent CLI
+   (commonly `claude`, or an SDK runner). It may be a shell while/for loop, a cron entry, a
+   systemd service/timer, a Makefile/npm/justfile target, a Python/Node runner, etc. — discover
+   it, don't assume filenames. Note the file + line and how it launches the agent today.
+   IF THERE IS NO SUCH LOOP: do NOT invent one, do NOT edit anything, and do NOT submit a plan.
+   Just reply with the single line "No autonomous-agent loop found in this repo — nothing to
+   integrate." and stop.
+2. Gate each cycle: run `ir gate` before the agent invocation and skip the cycle when it returns
+   non-zero (using the loop's own idiom — sleep+continue, etc.). Use ir's absolute path
+   (`command -v ir`) if the loop runs with a stripped PATH (systemd/cron). Compose with any
+   existing gate/throttle rather than replacing it.
+3. Run the cycle on economy: replace the agent launch with `ir --economy …`, dropping any
+   `--model` pin and any hand-rolled ANTHROPIC_BASE_URL/token env — `ir` handles all of it.
+   (Per-role tiers via `ir --economy --model kimi`/`glm` only if the loop clearly separates roles.)
 4. Present the plan: exact files + lines + edits, how to test one gated cycle, how to revert.
-   On approval, apply the edits and `bash -n` each changed script.
+   On approval, apply the edits and syntax-check each changed file.
 """
 
 
@@ -102,11 +106,11 @@ def cmd_integrate(args: list[str]) -> int:
     return 0
 
 
-# Read-only research tools pre-approved for the planning phase (no approval prompts).
-# Deliberately scoped: `ir gate`/`ir help` only — never bare `ir`/`ir auto` (nested launch).
-_RESEARCH_TOOLS = [
-    "Read", "Grep", "Glob",
-    "Bash(ir gate:*)", "Bash(ir help)", "Bash(ir --help)", "Bash(ir -h)",
-    "Bash(grep:*)", "Bash(rg:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(sed:*)",
-    "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(find:*)", "Bash(command:*)",
-]
+# Tools pre-approved for the planning phase so the user is NEVER prompted on the way to the
+# plan. Broad `Bash` is deliberate: agents shell with compound commands (`a; echo $?`, `&&`)
+# and varied discovery tools (crontab, systemctl, find…) that a granular allow-list can't
+# cover without prompting. Safety holds via THREE other guards, not via restricting research:
+#   1. --permission-mode plan  → file edits require explicit plan approval (the real gate).
+#   2. --disallowedTools Task  → no Explore/subagents (keeps it fast + small-context).
+#   3. CLAUDECODE guard in launch.py → bare `ir`/`ir --model …` can't spawn a nested session.
+_RESEARCH_TOOLS = ["Read", "Grep", "Glob", "Bash"]

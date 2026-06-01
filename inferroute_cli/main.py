@@ -63,7 +63,15 @@ def _resolve_model_name(name: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import os
     args = list(sys.argv[1:] if argv is None else argv)
+
+    # `--economy` (clean first-class form) selects the economy lane — equivalent to the
+    # `IR_LANE=economy ir …` env prefix but far less error-prone. Consume it here (so it's
+    # not passed through to claude) and set IR_LANE, which launch.py already honors.
+    if "--economy" in args or "--econ" in args:
+        args = [a for a in args if a not in ("--economy", "--econ")]
+        os.environ["IR_LANE"] = "economy"
 
     # ── Bare `ir` → auto-route (same as `ir auto`) ─────────────────────
     # Also covers `ir --model foo`, `ir --effort high`, `ir --model=X --any-claude-flag`
