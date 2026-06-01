@@ -21,34 +21,45 @@ def _print_unknown(cmd: str) -> int:
 
 
 def _extract_model_override(args: list[str]) -> tuple[str | None, list[str]]:
-    """Pull a user-supplied `--model X` or `--model=X` out of an argv slice.
+    """Pull `--model X` / `--model=X` out of an argv slice and translate.
 
-    Why: `ir` pins `--model <alias_id>` on the claude command line. If the user
-    also passes `--model`, claude ends up with two `--model` flags. Some versions
-    of claude take the last one, others may error. Either way it's fragile. We
-    strip the user-supplied one from passthrough and let the caller use it
-    instead of the alias's default — explicit user intent wins.
+    Returns (resolved_model_id or None, remaining_args). If the user-supplied
+    value matches one of the friendly short names in `models.ALIASES`, we
+    translate it to the canonical model_id; otherwise the value passes
+    through verbatim so users can pin specific models the CLI doesn't know
+    about (e.g. `--model claude-opus-4-8`).
 
-    Returns (model_override or None, remaining_args). Does NOT mutate input.
-    Handles only the two common forms (`--model X` and `--model=X`). Short
-    forms like `-m` aren't claude conventions; add them here if they appear.
+    Handles `--model X` and `--model=X`. Does NOT mutate input. Add a `-m`
+    short form here if claude grows one.
     """
     out: list[str] = []
-    override: str | None = None
+    raw: str | None = None
     i = 0
     while i < len(args):
         a = args[i]
         if a == "--model" and i + 1 < len(args):
-            override = args[i + 1]
+            raw = args[i + 1]
             i += 2
             continue
         if a.startswith("--model="):
-            override = a.split("=", 1)[1]
+            raw = a.split("=", 1)[1]
             i += 1
             continue
         out.append(a)
         i += 1
-    return override, out
+    resolved = _resolve_model_name(raw) if raw is not None else None
+    return resolved, out
+
+
+def _resolve_model_name(name: str) -> str:
+    """`minimax` → `MiniMax-M2.7`. Unknown names pass through verbatim.
+
+    This is the ONE place where friendly short names get translated. Anywhere
+    else that wants the same behavior should call this rather than
+    re-implementing it.
+    """
+    alias = models.get(name)
+    return alias.model_id if alias is not None else name
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -126,17 +137,16 @@ def main(argv: list[str] | None = None) -> int:
         launch.launch_native_anthropic(extra_args=rest)
         return 0  # never reached
 
-    # ── Routed model shortcuts ─────────────────────────────────────────
+    # Model selection is now `ir --model NAME`, not `ir <alias>`. If the user
+    # typed an old-style alias subcommand, point them at the new form.
     alias = models.get(cmd)
     if alias is not None:
-        creds = config.load()
-        # Honor user-supplied --model: if they typed `ir minimax --model X`,
-        # use X. Avoids emitting duplicate --model flags to claude (which is
-        # fragile depending on claude's argv parser).
-        user_model, passthrough = _extract_model_override(rest)
-        model = user_model or alias.model_id
-        launch.launch_through_inferroute(model, creds, extra_args=passthrough)
-        return 0  # never reached
+        sys.stderr.write(
+            f"\n  `ir {cmd}` was removed in v0.3.0 — model selection is now a flag.\n"
+            f"  Run: ir --model {cmd}\n"
+            f"  (or just `ir` to let inferroute auto-route)\n\n"
+        )
+        return 2
 
     return _print_unknown(cmd)
 
