@@ -66,6 +66,31 @@ def _print_session_link(api_url: str) -> None:
     sys.stderr.flush()
 
 
+def _print_economy_banner() -> None:
+    """Print a green 'economy lane' banner when this launch is tagged economy.
+
+    Fires when IR_LANE=economy is in the environment (set by a deferred-loop gate
+    snippet, or by `ir` itself in an economy context). Purely cosmetic — the actual
+    discount is decided server-side at serve time. Goes to stderr so Claude Code's
+    stdout screen-clear doesn't wipe it.
+    """
+    g = "\033[38;5;42m"   # lime-green
+    d = "\033[38;5;28m"   # darker green (border)
+    b = "\033[1m"
+    r = "\033[0m"
+    lines = [
+        "",
+        f"{d}  ╭────────────────────────────────────────────────╮{r}",
+        f"{d}  │{r}  {b}{g}⚡ ECONOMY LANE{r}  ·  running on cheap off-peak     {d}│{r}",
+        f"{d}  │{r}     compute. This run is {b}{g}discounted{r}.            {d}│{r}",
+        f"{d}  │{r}     {g}Savings show up in your session view.{r}      {d}│{r}",
+        f"{d}  ╰────────────────────────────────────────────────╯{r}",
+        "",
+    ]
+    sys.stderr.write("\n".join(lines) + "\n")
+    sys.stderr.flush()
+
+
 def _require_claude_binary() -> str:
     """Find the `claude` binary on PATH or print a friendly error."""
     path = shutil.which("claude")
@@ -113,6 +138,11 @@ def launch_through_inferroute(
     env["ANTHROPIC_BASE_URL"] = creds.api_url
     env["ANTHROPIC_AUTH_TOKEN"] = creds.api_key
     # NOTE: deliberately do NOT pop ANTHROPIC_API_KEY — see docstring.
+
+    # Economy lane banner (cosmetic) — show it before the dashboard link when the
+    # caller tagged this run economy (IR_LANE=economy, e.g. a deferred-loop gate).
+    if env.get("IR_LANE", "").strip().lower() == "economy":
+        _print_economy_banner()
 
     # Print the dashboard link BEFORE handing the terminal to claude.
     _print_session_link(creds.api_url)
