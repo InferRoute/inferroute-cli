@@ -40,13 +40,29 @@ ALIASES: list[ModelAlias] = [
     ),
     ModelAlias(
         short="minimax",
-        # Pass the short name so Claude Code displays "MiniMax-M2.7" in the
-        # session header instead of revealing "minimax_direct/…". Proxy
+        # Bare `minimax` stays pinned to M2.7 for backward-compat (muscle
+        # memory). Pass the short name so Claude Code displays "MiniMax-M2.7"
+        # in the session header instead of revealing "minimax_direct/…". Proxy
         # has a top-level `MiniMax-M2.7` model entry that routes to the
         # MiniMax Token Plan sub (api.minimax.io/anthropic).
         model_id="MiniMax-M2.7",
-        label="MiniMax M2.7",
+        label="MiniMax M2.7 (cheaper)",
         tier="fast",
+    ),
+    ModelAlias(
+        short="minimax-m2.7",
+        # Explicit M2.7 alias (same target as bare `minimax`).
+        model_id="MiniMax-M2.7",
+        label="MiniMax M2.7 — cheaper/smaller direct-sub model",
+        tier="fast",
+    ),
+    ModelAlias(
+        short="minimax-m3",
+        # MiniMax M3 — newer flagship on the same direct Token Plan sub.
+        # Proxy has a top-level `MiniMax-M3` entry routing to api.minimax.io/anthropic.
+        model_id="MiniMax-M3",
+        label="MiniMax M3 — newer/stronger flagship",
+        tier="balanced",
     ),
     ModelAlias(
         short="kimi",

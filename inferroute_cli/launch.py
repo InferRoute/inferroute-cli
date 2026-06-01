@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-import time
+import uuid
 from pathlib import Path
 from typing import Iterable
 
@@ -32,18 +32,19 @@ _DEFAULT_FLAGS = ["--dangerously-skip-permissions"]
 _ROUTING_ALIAS_IDS = frozenset({"multi-model", "auto", "inferroute"})
 
 
-def _print_session_link(api_url: str) -> None:
+def _print_session_link(api_url: str, session_id: str) -> None:
     """Print a clickable URL to view this session's traffic on the dashboard.
 
-    The session page at <site>/dashboard/session/[id] uses a `from-<unix_ms>`
-    slug — it aggregates every usage_records row since that timestamp. So
-    capturing "now" here gives the user a stable link they can revisit later
-    to see exactly the requests this `ir` invocation produced.
+    The session page at <site>/session/[id] is keyed by the per-launch
+    `session_id` we mint below and inject into every Claude Code request (via
+    ANTHROPIC_CUSTOM_HEADERS). The proxy tags each usage_records row with it, so
+    the link shows exactly — and only — the requests this `ir` invocation
+    produced, even when several `ir` sessions run concurrently. (Older links use
+    a `from-<unix_ms>` timestamp-window slug; the dashboard still accepts those.)
 
     We also persist the URL to ~/.config/inferroute/last_session for retrieval
     via `ir status` or shell history.
     """
-    now_ms = int(time.time() * 1000)
     # api.inferroute.ai → inferroute.ai (the dashboard sits on the apex domain).
     # Works for https://api.X and http://api.X; leaves anything else alone.
     site = api_url
@@ -55,7 +56,7 @@ def _print_session_link(api_url: str) -> None:
     # Note: it's `/session/...` not `/dashboard/session/...` — the
     # (dashboard) route group in inferroute-site is parenthesised and
     # therefore not part of the URL path (Next.js App Router convention).
-    url = f"{site.rstrip('/')}/session/from-{now_ms}"
+    url = f"{site.rstrip('/')}/session/{session_id}"
 
     # Persist for later retrieval (e.g. `ir status`, or user copy-paste).
     try:
@@ -184,11 +185,25 @@ def launch_through_inferroute(
         env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model_id
         env["ANTHROPIC_SMALL_FAST_MODEL"] = model_id
 
+    # Mint a stable per-launch session id and thread it into EVERY Claude Code
+    # request via a custom header, so the proxy can tag each usage row and the
+    # dashboard link shows exactly this invocation's traffic (even with several
+    # `ir` sessions running at once). CC sends ANTHROPIC_CUSTOM_HEADERS on every
+    # request — including background "haiku" chores — merged with auth headers.
+    # MERGE with any value the user already set (newline-separated) rather than
+    # clobbering it.
+    session_id = uuid.uuid4().hex
+    _session_header = f"x-inferroute-session: {session_id}"
+    _existing_headers = env.get("ANTHROPIC_CUSTOM_HEADERS", "").strip()
+    env["ANTHROPIC_CUSTOM_HEADERS"] = (
+        f"{_existing_headers}\n{_session_header}" if _existing_headers else _session_header
+    )
+
     if economy:
         _print_economy_banner()
 
     # Print the dashboard link BEFORE handing the terminal to claude.
-    _print_session_link(creds.api_url)
+    _print_session_link(creds.api_url, session_id)
 
     # permission_mode (e.g. "plan") makes Claude Code propose before acting — the
     # plan-approval IS the gate, so we drop --dangerously-skip-permissions (it would
