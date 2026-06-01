@@ -132,6 +132,48 @@ class InferrouteProxy:
             )
             return await self._forward_anthropic(body, request_headers)
 
+        # Honor explicit model pick. `ir --model NAME` sends a specific model
+        # in the request body; the user has already made a routing choice and
+        # the classifier has no business overriding it. Only run the classifier
+        # when model is the auto-routing sentinel ("multi-model"), or when
+        # there's no model field at all (some clients omit it).
+        # Backend selection in this branch: claude-* names → user's own
+        # Anthropic creds (direct pass-through); anything else → server.
+        explicit_model = (body.get("model") or "").strip()
+        if explicit_model and explicit_model != "multi-model":
+            if explicit_model.startswith("claude-"):
+                backend = "anthropic"
+                reason = f"explicit_model:{explicit_model}"
+            else:
+                backend = "minimax"  # server-side leg handles MiniMax/Kimi/GLM/etc.
+                reason = f"explicit_model:{explicit_model}"
+            logger.debug(f"explicit-model→{backend} model={explicit_model}")
+            self._record(
+                "anthropic_explicit" if backend == "anthropic" else "minimax_explicit",
+                reason, meta, savings,
+            )
+            self._log_decision(
+                body=body, decision=None, classifier_result=None,
+                tier=("frontier" if backend == "anthropic" else "minimax_ok"),
+                reason=reason, backend=backend, fast_path=True, compacted=False,
+            )
+            if backend == "anthropic":
+                return await self._forward_anthropic(body, request_headers)
+            # Server route — the body's `model` field already names the right
+            # backend, no need for model_id substitution.
+            try:
+                status, hdrs, stream = await self._forward_inferroute_server(
+                    body, request_headers, "minimax", reason, savings,
+                )
+                if status >= 500:
+                    async for _ in stream:
+                        pass
+                    return await self._forward_anthropic(body, request_headers)
+                return status, hdrs, stream
+            except httpx.HTTPError as e:
+                logger.warning(f"server unreachable on explicit-model leg ({e}), failing open→anthropic")
+                return await self._forward_anthropic(body, request_headers)
+
         # Local classifier first; fall back to legacy server route on miss.
         backend, reason, route_label, decision = await self._decide_route(
             body, meta, request_headers
