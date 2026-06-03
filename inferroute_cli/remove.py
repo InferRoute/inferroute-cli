@@ -1,16 +1,17 @@
-"""`ir remove local-routing` — symmetric reverse of `ir add local-routing`.
+"""`ir remove recording` — symmetric reverse of `ir add recording`.
 
 What this does:
   1. Stop + disable the systemd unit (Linux) / launchd plist (macOS).
-  2. Remove the rc-edit block from the user's shell config (between the
-     `# >>> inferroute local-routing >>>` markers `ir add` wrote).
-  3. Optionally remove the ~/.inferroute/models/classifier-v0/ directory
-     and the decision logs (off by default — `--purge` to wipe).
-  4. Optionally uninstall the [local] pip extras (off by default — `--uninstall-deps`).
+  2. Remove the rc-edit block from the user's shell config (recognises both the
+     current `# >>> inferroute recording >>>` markers and the legacy
+     `# >>> inferroute local-routing >>>` ones).
+  3. Optionally delete the local recorded data (off by default — `--purge`).
+  4. Optionally uninstall the [local] pip deps (off by default — `--uninstall-deps`).
 
-The default behavior is intentionally CONSERVATIVE: stop the daemon and
-disconnect the shell, but leave artifacts on disk in case the user wants
-to come back. `--purge` is the "really, all of it" flag.
+Default behavior is CONSERVATIVE: stop the daemon and disconnect the shell, but
+leave the recorded corpus on disk in case the user wants to come back. `--purge`
+is the "really, all of it" flag. `local-routing` is accepted as a deprecated
+alias for `recording`.
 """
 from __future__ import annotations
 
@@ -24,6 +25,8 @@ from pathlib import Path
 from .add import (
     SHELL_EDIT_MARKER_BEGIN,
     SHELL_EDIT_MARKER_END,
+    _LEGACY_MARKER_BEGIN,
+    _LEGACY_MARKER_END,
     SHELL_RC_FILES,
     _detect_shell,
 )
@@ -31,22 +34,19 @@ from .add import (
 
 def cmd_remove(rest: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="ir remove")
-    ap.add_argument("feature", choices=["local-routing"])
+    ap.add_argument("feature", choices=["recording", "local-routing"])
     ap.add_argument("--purge", action="store_true",
-                    help="Also delete the classifier model and decision logs.")
+                    help="Also delete the local recorded data (~/.inferroute events + blobs).")
     ap.add_argument("--uninstall-deps", action="store_true",
-                    help="Also uninstall the [local] pip extras (onnxruntime, tokenizers, fastapi, uvicorn).")
+                    help="Also uninstall the [local] pip deps (fastapi, uvicorn, httpx).")
     ns = ap.parse_args(rest)
-
-    if ns.feature == "local-routing":
-        return _remove_local_routing(ns)
-    return 2
+    return _remove_recording(ns)
 
 
-def _remove_local_routing(ns) -> int:
+def _remove_recording(ns) -> int:
     print()
-    print("  Removing local-routing")
-    print("  ──────────────────────")
+    print("  Removing recording")
+    print("  ──────────────────")
 
     # Step 1: stop + disable the user service.
     sysname = platform.system()
@@ -60,30 +60,35 @@ def _remove_local_routing(ns) -> int:
     # Step 2: remove the shell rc block.
     _undo_shell_rc()
 
-    # Step 3: optional purge of artifacts on disk.
+    # Step 3: optional purge of recorded data + any legacy artifacts.
     if ns.purge:
+        removed_any = False
         for path in [
-            Path.home() / ".inferroute" / "models" / "classifier-v0",
-            Path.home() / ".inferroute" / "logs",
+            Path.home() / ".inferroute" / "events",
+            Path.home() / ".inferroute" / "blobs",
+            Path.home() / ".inferroute" / "derived",
+            Path.home() / ".inferroute" / "logs",            # legacy decision logs
+            Path.home() / ".inferroute" / "models",          # legacy classifier
         ]:
             if path.exists():
                 shutil.rmtree(path, ignore_errors=True)
                 print(f"  [3/3] Removed {path}")
+                removed_any = True
+        if not removed_any:
+            print("  [3/3] Nothing to purge.")
     else:
-        print("  [3/3] Leaving model + logs on disk (use --purge to delete).")
+        print("  [3/3] Leaving recorded data on disk (use --purge to delete).")
 
-    # Optional: uninstall the [local] extras themselves.
     if ns.uninstall_deps:
-        # We don't uninstall `inferroute` itself — that'd remove `ir`. We just
-        # remove the optional deps. Pip has no "remove extras" verb, so we
-        # explicitly list them.
+        # We don't uninstall `inferroute` itself — that'd remove `ir`. Just the
+        # optional deps. Pip has no "remove extras" verb, so list them.
         cmd = [sys.executable, "-m", "pip", "uninstall", "-y",
-               "fastapi", "uvicorn", "onnxruntime", "tokenizers", "click"]
+               "fastapi", "uvicorn", "httpx"]
         subprocess.call(cmd)
         print("        Uninstalled [local] pip deps.")
 
     print()
-    print("  Done. Local-routing removed.")
+    print("  Done. Recording removed.")
     print("  `ir` continues to work as the lightweight launcher.")
     print()
     return 0
@@ -126,23 +131,32 @@ def _undo_shell_rc() -> None:
         print("  [2/3] No managed shell rc detected — skipping.")
         return
     text = rc_path.read_text()
-    if SHELL_EDIT_MARKER_BEGIN not in text:
+    changed = False
+    for begin, end in (
+        (SHELL_EDIT_MARKER_BEGIN, SHELL_EDIT_MARKER_END),
+        (_LEGACY_MARKER_BEGIN, _LEGACY_MARKER_END),
+    ):
+        text, did = _excise_block(text, begin, end, rc_path)
+        changed = changed or did
+    if changed:
+        rc_path.write_text(text)
+        print(f"        Open a new shell to pick up the change.")
+    else:
         print(f"  [2/3] No inferroute block in {rc_path} — skipping.")
-        return
-    # Find begin/end markers (with surrounding newline if present) and excise.
-    start = text.find(SHELL_EDIT_MARKER_BEGIN)
-    end = text.find(SHELL_EDIT_MARKER_END, start)
-    if end == -1:
-        print(f"  [2/3] Found begin marker but no end marker in {rc_path} — skipping (edit manually).")
-        return
-    end += len(SHELL_EDIT_MARKER_END)
-    # Strip the trailing newline if it belongs to the marker block.
-    while end < len(text) and text[end] == "\n":
-        end += 1
-    # Also strip a single leading newline if it was the separator before the block.
+
+
+def _excise_block(text: str, begin: str, end: str, rc_path: Path) -> tuple[str, bool]:
+    start = text.find(begin)
+    if start == -1:
+        return text, False
+    stop = text.find(end, start)
+    if stop == -1:
+        print(f"  [2/3] Found begin marker but no end marker in {rc_path} — skip (edit manually).")
+        return text, False
+    stop += len(end)
+    while stop < len(text) and text[stop] == "\n":
+        stop += 1
     if start > 0 and text[start - 1] == "\n":
         start -= 1
-    new = text[:start] + text[end:]
-    rc_path.write_text(new)
     print(f"  [2/3] Removed inferroute block from {rc_path}")
-    print(f"        Open a new shell to pick up the change.")
+    return text[:start] + text[stop:], True

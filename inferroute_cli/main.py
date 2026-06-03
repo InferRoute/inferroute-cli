@@ -73,28 +73,27 @@ def main(argv: list[str] | None = None) -> int:
         args = [a for a in args if a not in ("--economy", "--econ")]
         os.environ["IR_LANE"] = "economy"
 
-    # ── Bare `ir` → auto-route (same as `ir auto`) ─────────────────────
-    # Also covers `ir --model foo`, `ir --effort high`, `ir --model=X --any-claude-flag`
-    # — anything where the first arg is a flag rather than a subcommand. In
-    # those cases there's no subcommand to dispatch on; we treat the whole
-    # argv as passthrough to claude and route via 'auto' unless the user
-    # supplied their own --model.
+    # ── Bare `ir` (or `ir <flags>` with no model) → interactive picker ──
+    # Also covers `ir --effort high`, `ir --model=X --any-claude-flag` — anything
+    # where the first arg is a flag rather than a subcommand. There's no
+    # subcommand to dispatch on; if the user pinned a model we launch it, else
+    # we open the picker. (No auto-route — the user always chooses.)
     if not args or args[0].startswith("-"):
-        creds = config.load()
-        if not creds.is_valid:
-            sys.stderr.write(
-                "\n  No inferroute key configured.\n"
-                "  Run `ir login` to set one up, or `ir help` for options.\n\n"
-            )
-            return 2
-        auto = models.get("auto")
-        if auto is None:
-            sys.stderr.write("  internal error: 'auto' alias missing\n")
-            return 1
         user_model, passthrough = _extract_model_override(args)
-        model = user_model or auto.model_id
-        launch.launch_through_inferroute(model, creds, extra_args=passthrough)
-        return 0  # never reached — exec replaces process
+        if user_model is not None:
+            # Explicit pin: `ir --model X [claude flags]` → launch directly.
+            creds = config.load()
+            if not creds.is_valid:
+                sys.stderr.write(
+                    "\n  No inferroute key configured.\n"
+                    "  Run `ir login` to set one up, or `ir help` for options.\n\n"
+                )
+                return 2
+            launch.launch_through_inferroute(user_model, creds, extra_args=passthrough)
+            return 0  # never reached — exec replaces process
+        # No model specified → interactive picker so the user chooses one.
+        from . import choose as choose_mod
+        return choose_mod.run(passthrough)
 
     cmd, rest = args[0], args[1:]
 
@@ -119,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "choose":
         from . import choose as choose_mod
-        return choose_mod.run()
+        return choose_mod.run(rest)
 
     if cmd == "gate":
         from . import gate as gate_mod
@@ -130,15 +129,20 @@ def main(argv: list[str] | None = None) -> int:
         return integrate_mod.cmd_integrate(rest)
 
     if cmd == "add":
-        # `ir add local-routing` — install the optional on-device daemon.
+        # `ir add recording` — install the optional on-device recorder daemon.
         # Import lazily so the launcher cold-start stays cheap.
         from . import add as add_mod
         return add_mod.cmd_add(rest)
 
     if cmd == "remove":
-        # Symmetric uninstall. `--purge` wipes model + logs too.
+        # Symmetric uninstall. `--purge` wipes recorded data too.
         from . import remove as remove_mod
         return remove_mod.cmd_remove(rest)
+
+    if cmd == "data":
+        # `ir data show|export|wipe` — manage the local recorded corpus.
+        from . import data as data_mod
+        return data_mod.cmd_data(rest)
 
     if cmd == "anthropic":
         # Escape hatch — no env, no key check, no inferroute touch.
@@ -152,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(
             f"\n  `ir {cmd}` was removed in v0.3.0 — model selection is now a flag.\n"
             f"  Run: ir --model {cmd}\n"
-            f"  (or just `ir` to let inferroute auto-route)\n\n"
+            f"  (or just `ir` to open the model picker)\n\n"
         )
         return 2
 

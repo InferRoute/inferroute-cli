@@ -6,10 +6,13 @@ facing contract; the canonical model_id can change without breaking muscle
 memory.
 
 These are NOT subcommands. The supported forms are:
-    ir                              # auto (multi-model)
+    ir                              # interactive picker (ir choose)
     ir --model minimax              # short name → translated
     ir --model MiniMax-M2.7         # canonical id passes through
     ir --model claude-opus-4-8      # any other model id passes through too
+
+There is no auto-route. The user picks a model per session; the local daemon
+never decides. (Cloud-side fallbacks still apply upstream.)
 """
 
 from __future__ import annotations
@@ -32,12 +35,6 @@ class ModelAlias:
 
 # Order matters — `ir choose` shows them top-to-bottom.
 ALIASES: list[ModelAlias] = [
-    ModelAlias(
-        short="auto",
-        model_id="multi-model",
-        label="Let inferroute pick the best model for the task",
-        tier="balanced",
-    ),
     ModelAlias(
         short="minimax",
         # Bare `minimax` stays pinned to M2.7 for backward-compat (muscle

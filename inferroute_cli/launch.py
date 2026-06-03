@@ -24,12 +24,33 @@ from .config import Credentials
 
 _DEFAULT_FLAGS = ["--dangerously-skip-permissions"]
 
-# Model ids that mean "let the proxy route" rather than "pin this exact model".
-# When the user picks one of these (e.g. bare `ir`, `ir auto`) we deliberately
-# leave Claude Code's small/fast slot unpinned so its background chores route
-# cheaply alongside everything else. Anything NOT in this set is a specific
-# pin, and we mirror it into the haiku slot too (see launch_through_inferroute).
-_ROUTING_ALIAS_IDS = frozenset({"multi-model", "auto", "inferroute"})
+# There is no local router and no auto-route. The user always pins a concrete
+# model. The on-device daemon, when installed+running, is a pure RECORDING
+# pass-through: we route the session through it so it logs the choice + outcome
+# locally, then it forwards to the cloud (which still does its own fallbacks).
+# When the daemon isn't running we talk to the cloud directly.
+# See shared-docs/inferroute/local-decision-recorder-spec.md.
+LOCAL_DAEMON_URL = os.environ.get("INFERROUTE_LOCAL_URL", "http://localhost:5005").rstrip("/")
+
+
+def _recording_daemon_url() -> str | None:
+    """Return the on-device recorder daemon's URL if it's running, else None.
+
+    Cheap 150ms reachability probe so launch never noticeably stalls. The daemon
+    is installed (and local recording enabled) via `ir add`; when it's absent we
+    fall back to talking to the cloud directly and simply don't record.
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    u = urlparse(LOCAL_DAEMON_URL)
+    host = u.hostname or "localhost"
+    port = u.port or 80
+    try:
+        with socket.create_connection((host, port), timeout=0.15):
+            return LOCAL_DAEMON_URL
+    except OSError:
+        return None
 
 
 def _print_session_link(api_url: str, session_id: str) -> None:
@@ -161,7 +182,18 @@ def launch_through_inferroute(
     # route to the /economy base path so the proxy bills this run at the discount.
     # Otherwise the normal interactive base URL.
     economy = env.get("IR_LANE", "").strip().lower() == "economy"
-    base_url = creds.api_url.rstrip("/") + "/economy" if economy else creds.api_url
+    # Base URL selection:
+    #   • Economy lane → cloud /economy path so the proxy bills at the discount.
+    #     Bypasses the local daemon (a long-lived service can't see this launch's
+    #     IR_LANE), so economy turns aren't locally recorded.
+    #   • Recorder daemon running → route through it (records locally, then
+    #     forwards to the cloud).
+    #   • Otherwise → talk to the cloud directly (no recording).
+    # The cloud applies its own backend fallbacks upstream in every case.
+    if economy:
+        base_url = creds.api_url.rstrip("/") + "/economy"
+    else:
+        base_url = _recording_daemon_url() or creds.api_url
     env["ANTHROPIC_BASE_URL"] = base_url
     env["ANTHROPIC_AUTH_TOKEN"] = creds.api_key
     # NOTE: deliberately do NOT pop ANTHROPIC_API_KEY — see docstring.
@@ -169,21 +201,17 @@ def launch_through_inferroute(
     # Pin the small/fast slot too. `--model` only pins Claude Code's MAIN
     # model; CC keeps a separate "haiku" slot for background chores (session
     # title generation, is-this-a-new-topic checks, quota/spinner summaries).
-    # That slot defaults to a `claude-haiku-*` id, which the proxy does NOT
-    # recognise as a configured model — so it falls through to the multi-model
-    # router and lands on whatever pool model is cheapest (e.g. Kimi). The user
-    # who typed `ir --model minimax` then sees surprise Kimi traffic in the
-    # session viewer. Mirroring the pinned id into the haiku slot makes those
-    # calls bypass the router and stay on the chosen model.
+    # That slot defaults to a `claude-haiku-*` id the proxy doesn't recognise,
+    # so without this the user who typed `ir --model minimax` sees surprise
+    # background traffic on a different model in the session viewer. Mirroring
+    # the pinned id into the haiku slot keeps those calls on the chosen model.
+    # Every session now pins a concrete model, so this always applies.
     #
-    # Only for a SPECIFIC pin — in auto/multi-model mode we WANT the background
-    # slot to route cheaply like everything else, so leave it unset.
-    if model_id.lower() not in _ROUTING_ALIAS_IDS:
-        # ANTHROPIC_DEFAULT_HAIKU_MODEL is the current (CC v2.x) knob;
-        # ANTHROPIC_SMALL_FAST_MODEL is the legacy name older builds still read.
-        # Set both so the pin holds regardless of the user's CC version.
-        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model_id
-        env["ANTHROPIC_SMALL_FAST_MODEL"] = model_id
+    # ANTHROPIC_DEFAULT_HAIKU_MODEL is the current (CC v2.x) knob;
+    # ANTHROPIC_SMALL_FAST_MODEL is the legacy name older builds still read.
+    # Set both so the pin holds regardless of the user's CC version.
+    env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model_id
+    env["ANTHROPIC_SMALL_FAST_MODEL"] = model_id
 
     # Mint a stable per-launch session id and thread it into EVERY Claude Code
     # request via a custom header, so the proxy can tag each usage row and the

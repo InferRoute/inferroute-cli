@@ -24,8 +24,8 @@ def create_app(config: Config) -> FastAPI:
         _stats.load_persisted()  # restore cumulative compression savings
         logger.info(
             f"inferroute-local listening on {config.host}:{config.port} "
-            f"→ server: {config.inferroute_server_url} "
-            f"(compression {'on' if config.compress_enabled else 'off'})"
+            f"→ {config.inferroute_server_url} "
+            f"(recording: {config.record_level})"
         )
         yield
         await proxy.close()
@@ -64,6 +64,29 @@ def create_app(config: Config) -> FastAPI:
             except Exception:
                 parsed = raw.decode(errors="replace")
             return JSONResponse(content=parsed, status_code=status, headers=resp_headers)
+
+    @app.post("/inferroute/signal")
+    async def signal(request: Request):
+        """Control surface: the CLI/UX posts explicit human signals here
+        (model switch, redo-on-stronger, rating). Recorded locally; never
+        forwarded anywhere. Body: {session_id, type, from_model?, to_model?,
+        ref?, rating?}."""
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        try:
+            proxy.recorder.record_signal(
+                session_id=str(payload.get("session_id") or ""),
+                type=str(payload.get("type") or "unknown"),
+                from_model=payload.get("from_model"),
+                to_model=payload.get("to_model"),
+                ref=payload.get("ref"),
+                rating=payload.get("rating"),
+            )
+        except Exception:
+            pass
+        return {"ok": True}
 
     @app.get("/health")
     async def health():

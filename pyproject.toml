@@ -24,29 +24,27 @@ dependencies = [
     "httpx>=0.27,<1.0",
 ]
 
-# Optional on-device routing. Adds a local HTTP daemon that intercepts CC
-# requests on localhost:5005, classifies each turn with a small ONNX model,
-# and routes between Anthropic-direct and the inferroute server-side MiniMax
-# leg. Without this extra, `ir` stays a tiny launcher that points CC at
+# Optional on-device recorder. Adds a local HTTP daemon that intercepts CC
+# requests on localhost:5005, records the user's per-session model choice and
+# how the turn went (privately, on-device), then forwards to api.inferroute.ai.
+# There is NO classifier and NO routing — it's a pure pass-through recorder.
+# Without this extra, `ir` stays a tiny launcher that points CC at
 # api.inferroute.ai (the original "ir" experience).
 #
-# Installed by `ir add local-routing`. See docs/local-routing.md.
+# Installed by `ir add recording`.
+# See shared-docs/inferroute/local-decision-recorder-spec.md.
 [project.optional-dependencies]
 local = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
     "click>=8.1",
-    # ONNX runtime + tokenizers (the Rust crate, NOT transformers — we don't
-    # need anything from transformers for inference and pulling it in risks
-    # transitively dragging torch onto user machines).
-    "onnxruntime>=1.20",
-    "tokenizers>=0.20",
 ]
 
 [project.scripts]
 ir = "inferroute_cli.main:main"
 # Internal entry point used by the systemd user unit installed via
-# `ir add local-routing`. Not surfaced in `ir help`; power users and
+# `ir add recording`. Not surfaced in `ir help`; power users and
 # debugging only.
 inferroute-daemon = "inferroute_local.cli:main"
 

@@ -98,6 +98,20 @@ class Config:
     # Absolute path to the log dir. Empty → use ~/.inferroute/logs/
     decision_log_dir: str = ""
 
+    # ── Local decision recorder ──────────────────────────────────────────
+    # The privacy-local corpus of the user's model choices + how they turned
+    # out. Replaces the old routing decision-log. Everything stays under
+    # record_dir on the user's machine; nothing is uploaded.
+    # See shared-docs/inferroute/local-decision-recorder-spec.md.
+    #   level "off"      → record nothing
+    #   level "metadata" → choice/outcome/signal events only (no prompt text)
+    #   level "full"     → also a content-addressed blob store of raw payloads
+    # Default ON (metadata).
+    record_level: str = "metadata"
+    record_dir: str = ""              # empty → ~/.inferroute
+    record_ttl_days: int = 90         # raw blob GC age; 0 = keep forever
+    record_blob_cap_bytes: int = 65536  # per-blob head+tail cap (oversize trim)
+
     # Session-aware router (Phase 2 of stability/routing).
     # commit_threshold — on the first turn of a session, if the classifier's
     #   max probability is below this, we route provisionally to minimax_ok
@@ -168,6 +182,14 @@ class Config:
             decision_log_enabled=_env_bool("INFERROUTE_LOG_DECISIONS", True),
             decision_log_include_text=_env_bool("INFERROUTE_LOG_TRAINING", False),
             decision_log_dir=os.environ.get("INFERROUTE_LOG_DIR", ""),
+            record_level=_record_level_default(),
+            record_dir=os.environ.get(
+                "INFERROUTE_RECORD_DIR", os.environ.get("INFERROUTE_LOG_DIR", "")
+            ),
+            record_ttl_days=int(os.environ.get("INFERROUTE_RECORD_TTL_DAYS", "90")),
+            record_blob_cap_bytes=int(
+                os.environ.get("INFERROUTE_RECORD_BLOB_CAP_BYTES", "65536")
+            ),
             router_commit_threshold=float(
                 os.environ.get("INFERROUTE_ROUTER_COMMIT_THRESHOLD", "0.6")
             ),
@@ -193,3 +215,21 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _record_level_default() -> str:
+    """Resolve the recorder level, honoring the legacy decision-log env vars so
+    existing installs keep working:
+      INFERROUTE_RECORD_LEVEL wins if set (off|metadata|full);
+      else INFERROUTE_LOG_TRAINING=1 → full;
+      else INFERROUTE_LOG_DECISIONS=0 → off;
+      else → metadata (default ON)."""
+    explicit = os.environ.get("INFERROUTE_RECORD_LEVEL")
+    if explicit:
+        lvl = explicit.strip().lower()
+        return lvl if lvl in {"off", "metadata", "full"} else "metadata"
+    if _env_bool("INFERROUTE_LOG_TRAINING", False):
+        return "full"
+    if not _env_bool("INFERROUTE_LOG_DECISIONS", True):
+        return "off"
+    return "metadata"

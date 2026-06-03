@@ -61,7 +61,7 @@ def run(args=None) -> int:
         print(f"  ✓ {n_models} models available")
     print()
     print("  Try it:")
-    print("    ir              # auto-route through inferroute")
-    print("    ir minimax      # pin to MiniMax M2.5")
-    print("    ir status       # see your usage")
+    print("    ir                   # open the model picker, then launch")
+    print("    ir --model minimax   # pin to MiniMax")
+    print("    ir status            # see your usage")
     return 0

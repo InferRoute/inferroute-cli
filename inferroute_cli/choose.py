@@ -1,8 +1,9 @@
 """`ir choose` — interactive picker. Saves no state; just prints the
 `ir --model NAME` command to run, so the user learns what to type next time.
 
-One screen, five options: Fast (MiniMax), the two balanced-tier models
-(Kimi and GLM), Smart (auto-route), and the native-Anthropic escape hatch.
+One screen: Fast (MiniMax), the flagship, the two balanced-tier models
+(Kimi and GLM), and the native-Anthropic escape hatch. There is no auto-route —
+the user always picks a concrete model; the local daemon never decides.
 """
 
 from __future__ import annotations
@@ -28,7 +29,13 @@ _OPTIONS = [
     (
         "minimax",
         "[b cyan]Fast[/b cyan]  — get something usable, cheap, fast iteration",
-        "Fast — MiniMax",
+        "Fast — MiniMax M2.7",
+        "primary",
+    ),
+    (
+        "minimax-m3",
+        "[b cyan]Flagship[/b cyan] — newer MiniMax M3: multimodal, 1M context, fast",
+        "Flagship — MiniMax M3",
         "primary",
     ),
     (
@@ -42,12 +49,6 @@ _OPTIONS = [
         "[b green]Balanced[/b green] — solid general-purpose alternative",
         "Balanced — GLM-5.1",
         "success",
-    ),
-    (
-        "auto",
-        "[b yellow]Smart[/b yellow]  — let the router pick from all available models",
-        "Smart — Auto-route",
-        "warning",
     ),
     (
         _ANTHROPIC,
@@ -108,7 +109,20 @@ class ChooseApp(App):
         self.exit()
 
 
-def run(args=None) -> int:
+def run(extra_args=None) -> int:
+    extra_args = list(extra_args or [])
+
+    # The picker is a full-screen TUI — it needs a real terminal. Bail clearly
+    # rather than crash/hang when stdout isn't a TTY (pipes, CI, or an agent's
+    # Bash tool / a nested Claude Code session). Direct `ir --model NAME` still
+    # works in those contexts.
+    if not sys.stdout.isatty():
+        sys.stderr.write(
+            "\n  ir: the interactive picker needs a terminal.\n"
+            "  Use `ir --model NAME` (e.g. `ir --model minimax`) instead.\n\n"
+        )
+        return 2
+
     app = ChooseApp()
     app.run()
     short = app.selected_short
@@ -132,12 +146,12 @@ def run(args=None) -> int:
     from .launch import launch_native_anthropic, launch_through_inferroute
 
     if short == _ANTHROPIC:
-        launch_native_anthropic()
+        launch_native_anthropic(extra_args)
         return 0  # never reached — exec replaces process
 
     alias = models.get(short)
     if alias is None:  # defensive — every other id is a real alias
         sys.stderr.write(f"  internal error: alias '{short}' missing\n")
         return 1
-    launch_through_inferroute(alias.model_id, load())
+    launch_through_inferroute(alias.model_id, load(), extra_args=extra_args)
     return 0  # never reached — exec replaces process
