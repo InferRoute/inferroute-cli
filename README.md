@@ -11,7 +11,7 @@ on-device recorder logs your choices privately (see [Local recording](#local-rec
 ## Install
 
 ```bash
-pipx install git+https://github.com/InferRoute/inferroute-cli.git
+pipx install git+https://github.com/InferRoute/inferroute.git
 ir login
 ```
 
@@ -102,7 +102,7 @@ service sees nothing.
 
 ## Source
 
-https://github.com/InferRoute/inferroute-cli
+https://github.com/InferRoute/inferroute
 
 Issues / feature requests / PRs welcome.
 

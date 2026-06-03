@@ -50,8 +50,8 @@ inferroute-daemon = "inferroute_local.cli:main"
 
 [project.urls]
 Homepage = "https://inferroute.ai"
-Source = "https://github.com/InferRoute/inferroute-cli"
-Issues = "https://github.com/InferRoute/inferroute-cli/issues"
+Source = "https://github.com/InferRoute/inferroute"
+Issues = "https://github.com/InferRoute/inferroute/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["inferroute_cli", "inferroute_local"]

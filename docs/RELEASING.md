@@ -48,7 +48,7 @@ TAG=v0.2.0   # match the Python release tag
 import hashlib, json
 from pathlib import Path
 base = Path("$BUNDLE_DIR")
-release_url = "https://github.com/InferRoute/inferroute-cli/releases/download/$TAG"
+release_url = "https://github.com/InferRoute/inferroute/releases/download/$TAG"
 files = []
 for rel in ["onnx/model.onnx", "tokenizer.json", "calibration.json", "label_to_int.json"]:
     p = base / rel
