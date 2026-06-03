@@ -7,7 +7,9 @@ local corpus is yours — to inspect (`ir data show`), export, or wipe
 (`ir data wipe`). It is never uploaded; we never see it.
 
 What this does, in order:
-  1. Ask how much to record (metadata / full / no). Default: metadata.
+  1. Ask how much to record (full / minimal / no). Default: full — it keeps the
+     prompt text locally, which is what lets it learn your preferences; it never
+     leaves the machine.
   2. Install the `[local]` deps (fastapi, uvicorn) if missing.
   3. Install a systemd user unit (Linux) / launchd plist (macOS) that runs the
      recorder daemon, with the chosen record level baked in, and start it.
@@ -131,21 +133,26 @@ def _add_recording(ns) -> int:
 
 def _prompt_level(skip_prompt: bool) -> str:
     if skip_prompt:
-        return "metadata"
+        return "full"
     print(textwrap.dedent("""
       Inferroute can learn YOUR model preferences over time, to route for you
       later. To do that it records, on THIS machine only:
         • which model you pick for each task
-        • basic request shape + how the turn went
+        • the prompt + how the turn went
 
-      ✔ Stays in ~/.inferroute on your computer.
+      ✔ Stays in ~/.inferroute on your computer — right next to your code.
       ✔ Never uploaded. We never see it. It is yours.
       ✔ Inspect any time:  ir data show
       ✔ Delete any time:   ir data wipe
 
+      'full' keeps the prompt text, which is what actually lets it learn your
+      preferences later — and it never leaves this machine. 'minimal' keeps only
+      the model choice + outcome (no prompt text), which is lighter but can't
+      train a personal router.
+
       Record locally to build your own router?
-        [1] Yes — choices + outcomes only   (recommended)
-        [2] Yes — full (also stores prompt text locally, for best training)
+        [1] Yes — full: choices, outcomes + prompt text   (recommended)
+        [2] Yes — minimal: choices + outcomes only, no prompt text
         [3] No  — don't record
     """))
     try:
@@ -153,7 +160,7 @@ def _prompt_level(skip_prompt: bool) -> str:
     except (KeyboardInterrupt, EOFError):
         print()
         return "off"
-    return {"": "metadata", "1": "metadata", "2": "full", "3": "off"}.get(ans, "metadata")
+    return {"": "full", "1": "full", "2": "metadata", "3": "off"}.get(ans, "full")
 
 
 # ----- Step 1 helpers --------------------------------------------------------

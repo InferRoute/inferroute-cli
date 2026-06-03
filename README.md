@@ -72,8 +72,10 @@ this machine only** — which model you pick per task and how the turn went, so
 you (or a future personal router) can learn your preferences. It is **never
 uploaded; we never see it.**
 
-- Default level is metadata only (model choices + outcomes, no prompt text);
-  `full` also stores raw payloads locally.
+- Default is `full` — choices, outcomes, **and** prompt text. The prompt text is
+  what actually lets it learn your preferences, and it never leaves this machine.
+  Pick `minimal` at install for choices + outcomes only (no prompt text), which is
+  lighter but can't train a personal router.
 - Inspect it any time with `ir data show`, copy the metadata layer with
   `ir data export DIR` (never raw prompt text), or delete everything with
   `ir data wipe`.
