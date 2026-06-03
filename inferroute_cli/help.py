@@ -62,7 +62,7 @@ def run(args=None) -> int:
     lines.append("  ~/.config/inferroute/credentials   your API key (mode 600)")
     lines.append("")
     lines.append("Sign up: https://inferroute.ai")
-    lines.append("Source:  https://github.com/InferRoute/inferroute-cli")
+    lines.append("Source:  https://github.com/InferRoute/inferroute")
     lines.append("")
     print("\n".join(lines))
     return 0

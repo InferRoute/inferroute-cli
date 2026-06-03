@@ -74,14 +74,14 @@ class Config:
     classifier_model_dir: str = ""
 
     # On-demand model fetch (Phase 4).
-    # Defaults to the InferRoute/inferroute-cli GitHub Releases "latest"
+    # Defaults to the InferRoute/inferroute GitHub Releases "latest"
     # asset — so `ir add local-routing` works out of the box. Override via
     # INFERROUTE_CLASSIFIER_BOOTSTRAP_URL for staging or custom manifests.
     # See bootstrap.py for the manifest schema and docs/RELEASING.md for
     # how the bundle is built. Always fail-soft: a bad URL or sha mismatch
     # leaves the daemon running on the legacy server route.
     classifier_bootstrap_url: str = (
-        "https://github.com/InferRoute/inferroute-cli/releases/latest/download/"
+        "https://github.com/InferRoute/inferroute/releases/latest/download/"
         "classifier-v0-manifest.json"
     )
 
