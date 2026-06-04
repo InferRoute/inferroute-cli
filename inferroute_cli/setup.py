@@ -31,12 +31,17 @@ def run(rest=None) -> int:
             print("  Re-run `ir setup` once you have your key from https://inferroute.ai")
             return rc
 
-    # ── Step 2: optional local recording ──────────────────────────────
-    print("\n  [2/2] Optional — local recording (fully private, on-device)")
+    # ── Step 2: local recording (default ON, full) ────────────────────
+    # It only ever stays on this machine, so we enable it by default during
+    # setup instead of making the user answer a prompt. Fully reversible later:
+    #   ir add recording --level minimal   (lighter)
+    #   ir remove recording                (off)
+    print("\n  [2/2] Enabling local recording — full, private, stays on this machine.")
+    print("        Change later: `ir add recording --level minimal` · turn off: `ir remove recording`")
     from . import add as add_mod
-    # Prompts full / minimal / no; "no" installs nothing. We don't gate setup on
-    # its exit code — recording is optional, so a skip or failure here is fine.
-    add_mod.cmd_add(["recording"])
+    # --level full + --yes → no level prompt, no pip-install confirm. We don't gate
+    # setup on the result — a failure here shouldn't block a logged-in user.
+    add_mod.cmd_add(["recording", "--level", "full", "--yes"])
 
     # ── Done ──────────────────────────────────────────────────────────
     print()

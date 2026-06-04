@@ -15,9 +15,11 @@ pipx install inferroute
 ir setup
 ```
 
-That's it. `ir setup` walks you through it: log in with your key (saved to
-`~/.config/inferroute/credentials`, mode 600) and optionally turn on private
-on-device recording. Update any time with `pipx upgrade inferroute`.
+That's it. `ir setup` logs you in (key saved to
+`~/.config/inferroute/credentials`, mode 600) and enables private on-device
+recording — **full by default**, since it never leaves your machine; change it
+with `ir add recording --level minimal` or turn it off with `ir remove
+recording`. Update any time with `pipx upgrade inferroute`.
 
 Sign up for a key at https://inferroute.ai if you don't have one. (Prefer the
 steps separately? `ir login` then `ir add recording` do the same thing.)
