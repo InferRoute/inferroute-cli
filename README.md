@@ -11,18 +11,15 @@ on-device recorder logs your choices privately (see [Local recording](#local-rec
 ## Install
 
 ```bash
-pipx install git+https://github.com/InferRoute/inferroute.git
+pipx install inferroute
 ir login
 ```
 
 That's it. `ir login` saves your API key to `~/.config/inferroute/credentials`
-(mode 600) and verifies it against the inferroute API.
+(mode 600) and verifies it against the inferroute API. Update any time with
+`pipx upgrade inferroute`.
 
 Sign up for a key at https://inferroute.ai if you don't have one.
-
-> _A `pipx install inferroute` PyPI package is coming once the API surface
-> settles. For now, install straight from GitHub — pipx clones the repo
-> into its own venv, so updates are a one-line `pipx upgrade inferroute`._
 
 ## Commands
 

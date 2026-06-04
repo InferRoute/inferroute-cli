@@ -73,7 +73,7 @@ def cmd_add(rest: list[str]) -> int:
     )
     ap.add_argument(
         "--level", choices=_VALID_LEVELS, default=None,
-        help="Recording level (skips the prompt). metadata (default) | full | off.",
+        help="Recording level (skips the prompt). full (default) | metadata | off.",
     )
     ap.add_argument(
         "--no-shell-edit", action="store_true",
@@ -85,7 +85,7 @@ def cmd_add(rest: list[str]) -> int:
     )
     ap.add_argument(
         "--yes", "-y", action="store_true",
-        help="Accept defaults without prompting (level=metadata unless --level given).",
+        help="Accept defaults without prompting (level=full unless --level given).",
     )
     ns = ap.parse_args(rest)
 
