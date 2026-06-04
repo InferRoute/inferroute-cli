@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import getpass
 import sys
 from urllib.parse import urlparse
 
@@ -27,8 +26,11 @@ def run(args=None) -> int:
             sys.stderr.write(f"  ERROR: bad URL: {api_url}\n")
             return 2
 
+    # Visible prompt (not getpass): the key is pasted, and hiding it just makes
+    # users think the paste didn't register. The inf_ key is rotatable from the
+    # dashboard, so echoing it to the terminal is an acceptable trade for clarity.
     try:
-        key = getpass.getpass("  inferroute API key: ").strip()
+        key = input("  inferroute API key: ").strip()
     except (KeyboardInterrupt, EOFError):
         print()
         return 130
