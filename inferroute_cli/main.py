@@ -73,6 +73,16 @@ def main(argv: list[str] | None = None) -> int:
         args = [a for a in args if a not in ("--economy", "--econ")]
         os.environ["IR_LANE"] = "economy"
 
+    # ── Global help / version — honored as the FIRST token, dashed or not.
+    # Must run before the bare-flag picker branch below, which would otherwise
+    # treat a leading `--help`/`--version` as "flags, no model" and open the
+    # picker. `ir --help`, `ir -h`, `ir help`, `ir --version`, `ir -v` all work.
+    if args and args[0] in ("-h", "--help", "help"):
+        return help_mod.run()
+    if args and args[0] in ("-v", "--version"):
+        print(f"ir {__version__}")
+        return 0
+
     # ── Bare `ir` (or `ir <flags>` with no model) → interactive picker ──
     # Also covers `ir --effort high`, `ir --model=X --any-claude-flag` — anything
     # where the first arg is a flag rather than a subcommand. There's no
@@ -96,13 +106,6 @@ def main(argv: list[str] | None = None) -> int:
         return choose_mod.run(passthrough)
 
     cmd, rest = args[0], args[1:]
-
-    # ── Global flags handled at top-level ──────────────────────────────
-    if cmd in ("-h", "--help", "help"):
-        return help_mod.run()
-    if cmd in ("-v", "--version"):
-        print(f"ir {__version__}")
-        return 0
 
     # ── Account / utility commands ─────────────────────────────────────
     if cmd == "login":
