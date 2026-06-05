@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "inferroute"
-version = "0.3.4"
+version = "0.3.5"
 description = "Launch Claude Code through inferroute — typed less, routed smarter"
 readme = "README.md"
 license = "MIT"
@@ -47,6 +47,10 @@ ir = "inferroute_cli.main:main"
 # `ir add recording`. Not surfaced in `ir help`; power users and
 # debugging only.
 inferroute-daemon = "inferroute_local.cli:main"
+# Local, deterministic secret scrubber (stdlib-only; never uses the network).
+# Sanitizes logs/session data BEFORE anything is synced to the cloud, and can
+# rehydrate cloud results locally. See inferroute_local/SCRUBBER.md.
+inferroute-scrub = "inferroute_local.scrubber_cli:main"
 
 [project.urls]
 Homepage = "https://inferroute.ai"

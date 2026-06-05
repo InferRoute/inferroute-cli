@@ -73,6 +73,22 @@ ALIASES: list[ModelAlias] = [
         label="GLM-5.1 — solid general-purpose alternative",
         tier="balanced",
     ),
+    ModelAlias(
+        # Added 2026-06-05 as a resilience alternate: when the K2.6 / GLM-5.1
+        # chutes are saturated, K2.5 has separate slot capacity on Chutes.
+        short="kimi-2.5",
+        model_id="moonshotai/Kimi-K2.5-TEE",
+        label="Kimi K2.5 — prior-gen Kimi, alternate when K2.6 is busy",
+        tier="balanced",
+    ),
+    ModelAlias(
+        # Added 2026-06-05: DeepSeek V3.2 on Chutes — a separate model family,
+        # so it stays available when the Kimi/GLM chutes are overloaded.
+        short="deepseek",
+        model_id="deepseek-ai/DeepSeek-V3.2-TEE",
+        label="DeepSeek V3.2 — strong coding/reasoning, separate capacity",
+        tier="balanced",
+    ),
 ]
 
 
