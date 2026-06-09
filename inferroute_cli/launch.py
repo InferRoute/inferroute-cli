@@ -132,6 +132,55 @@ def _require_claude_binary() -> str:
     return path
 
 
+def _resolve_flags(permission_mode: str | None, extra_args: Iterable[str]) -> list[str]:
+    """Decide the permission flags handed to `claude`.
+
+    --dangerously-skip-permissions HARD-WINS over --permission-mode (verified: when both
+    are present, skip-permissions bypasses the allow-list entirely). So whenever the
+    caller manages permissions — via the `permission_mode` param OR by passing
+    `--permission-mode` themselves on the CLI — we must NOT inject skip-permissions.
+    A bare invocation keeps it so unattended agents that pass no allow-list don't stall
+    on permission prompts.
+    """
+    if permission_mode:
+        return ["--permission-mode", permission_mode]
+    if any(a == "--permission-mode" or a.startswith("--permission-mode=") for a in extra_args):
+        return []
+    return list(_DEFAULT_FLAGS)
+
+
+def _auto_compact_window(model_id: str) -> int:
+    """Effective context window (tokens) to feed Claude Code's native auto-compact
+    for a routed model.
+
+    Claude Code has no built-in context window for our custom model ids (e.g.
+    "moonshotai/Kimi-K2.6-TEE"), so it CANNOT auto-detect when to compact —
+    verified 2026-06-09: a long session grew the history monotonically and never
+    compacted even at "100% context used" (0 compactions), which on a real long
+    session means an eventual hard context-overflow instead of graceful
+    compaction. Telling CC the window via CLAUDE_CODE_AUTO_COMPACT_WINDOW makes
+    auto-compact fire at ~92% of it (empirically confirmed).
+
+    Values are conservative/safe-leaning: the proxy's tool-output compression
+    buffers a slight over-estimate, and compacting a little early is far better
+    than never. Refine as real per-model windows are confirmed.
+    """
+    m = (model_id or "").lower()
+    if "deepseek" in m:
+        return 120_000          # DeepSeek ~128k
+    if "kimi" in m or "glm" in m or "minimax" in m:
+        return 200_000          # Kimi-K2.6 / GLM-5.1 / MiniMax  (>=200k)
+    return 150_000              # conservative default for unrecognised models
+
+
+def _apply_autocompact_env(env: dict, model_id: str) -> dict:
+    """Set CLAUDE_CODE_AUTO_COMPACT_WINDOW so CC's auto-compact works for our
+    custom model ids. A user-supplied value always wins (we never override it)."""
+    if "CLAUDE_CODE_AUTO_COMPACT_WINDOW" not in env:
+        env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(_auto_compact_window(model_id))
+    return env
+
+
 def launch_through_inferroute(
     model_id: str,
     creds: Credentials,
@@ -221,11 +270,39 @@ def launch_through_inferroute(
     # MERGE with any value the user already set (newline-separated) rather than
     # clobbering it.
     session_id = uuid.uuid4().hex
-    _session_header = f"x-inferroute-session: {session_id}"
-    _existing_headers = env.get("ANTHROPIC_CUSTOM_HEADERS", "").strip()
-    env["ANTHROPIC_CUSTOM_HEADERS"] = (
-        f"{_existing_headers}\n{_session_header}" if _existing_headers else _session_header
-    )
+    _headers = []
+    _existing = env.get("ANTHROPIC_CUSTOM_HEADERS", "").strip()
+    if _existing:
+        _headers.append(_existing)
+    _headers.append(f"x-inferroute-session: {session_id}")
+    # Tag the economy lane via a HEADER too, not only the /economy base URL. The base URL
+    # alone is unreliable: CC's SDK drops the base-path segment on most requests (→ /v1/messages,
+    # which the gate counts as INTERACTIVE), so only a couple of turns per run were actually
+    # billed at the discount. CC forwards ANTHROPIC_CUSTOM_HEADERS on EVERY request (incl. the
+    # background haiku slot), and the gate tags `economy = economy_path OR ir-lane: economy`
+    # (cc-proxy-prod app.py), so this header makes the discount apply to every turn.
+    if economy:
+        _headers.append("ir-lane: economy")
+        # Present a single-use admission grant so the proxy ACCEPTS this session into economy — the
+        # discount is grant-gated, not just tag-gated. Use a pre-issued IR_GRANT (e.g. a deferred
+        # loop's `ir gate --print-grant`) if set, else grab one now by polling the gate right before
+        # exec (freshest grant → best margin against CC cold start). No grant (red / at cap /
+        # unreachable) → the run simply bills at the standard rate.
+        _grant = env.get("IR_GRANT", "").strip()
+        if not _grant:
+            try:
+                from .gate import grab_grant
+                _grant = grab_grant(creds) or ""
+            except Exception:
+                _grant = ""
+        if _grant:
+            _headers.append(f"ir-grant: {_grant}")
+    env["ANTHROPIC_CUSTOM_HEADERS"] = "\n".join(_headers)
+
+    # Make CC's native auto-compact work for our custom model ids (see
+    # _auto_compact_window). Without this, long ir sessions never compact and
+    # eventually hard-overflow the context.
+    _apply_autocompact_env(env, model_id)
 
     if economy:
         _print_economy_banner()
@@ -233,18 +310,18 @@ def launch_through_inferroute(
     # Print the dashboard link BEFORE handing the terminal to claude.
     _print_session_link(creds.api_url, session_id)
 
-    # permission_mode (e.g. "plan") makes Claude Code propose before acting — the
-    # plan-approval IS the gate, so we drop --dangerously-skip-permissions (it would
-    # bypass the very gate we want). Otherwise keep the default skip-permissions.
-    if permission_mode:
-        flags = ["--permission-mode", permission_mode]
-    else:
-        flags = list(_DEFAULT_FLAGS)
+    # A caller-supplied --permission-mode (the `permission_mode` param OR a passthrough
+    # --permission-mode on the CLI) means the caller governs permissions, so we must NOT
+    # force --dangerously-skip-permissions — it hard-wins over --permission-mode and would
+    # bypass the caller's allow-list. Bare invocations keep skip-permissions so unattended
+    # agents that pass no allow-list don't stall on prompts. (See _resolve_flags.)
+    extra = list(extra_args)
+    flags = _resolve_flags(permission_mode, extra)
     argv = [
         binary,
         *flags,
         "--model", model_id,
-        *list(extra_args),
+        *extra,
     ]
     # execvpe replaces the current process — claude inherits our terminal.
     os.execvpe(binary, argv, env)
