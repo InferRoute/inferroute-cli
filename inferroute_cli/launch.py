@@ -149,6 +149,27 @@ def _resolve_flags(permission_mode: str | None, extra_args: Iterable[str]) -> li
     return list(_DEFAULT_FLAGS)
 
 
+def _auto_compact_window(model_id: str) -> int:
+    """Effective context window (tokens) for Claude Code's native auto-compact.
+
+    CC has no built-in window for our custom model ids (e.g. "moonshotai/Kimi-K2.6-TEE")
+    so its auto-compact never fires — long ir sessions grow unbounded and hard-overflow
+    instead of compacting (verified 2026-06-09). Setting CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    makes it fire at ~92% of this. Conservative/safe-leaning (proxy compression buffers a
+    slight over-estimate; compacting a little early >> never)."""
+    m=(model_id or "").lower()
+    if "deepseek" in m: return 120_000
+    if "kimi" in m or "glm" in m or "minimax" in m: return 200_000
+    return 150_000
+
+
+def _apply_autocompact_env(env: dict, model_id: str) -> dict:
+    """Set CLAUDE_CODE_AUTO_COMPACT_WINDOW for our custom model ids; user value wins."""
+    if "CLAUDE_CODE_AUTO_COMPACT_WINDOW" not in env:
+        env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]=str(_auto_compact_window(model_id))
+    return env
+
+
 def launch_through_inferroute(
     model_id: str,
     creds: Credentials,
@@ -266,6 +287,10 @@ def launch_through_inferroute(
         if _grant:
             _headers.append(f"ir-grant: {_grant}")
     env["ANTHROPIC_CUSTOM_HEADERS"] = "\n".join(_headers)
+
+    # CC native auto-compact for custom model ids (see _auto_compact_window);
+    # without this, long ir sessions never compact and hard-overflow the context.
+    _apply_autocompact_env(env, model_id)
 
     if economy:
         _print_economy_banner()
