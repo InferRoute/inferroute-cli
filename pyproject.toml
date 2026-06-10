@@ -22,6 +22,7 @@ classifiers = [
 dependencies = [
     "textual>=0.78,<2.0",
     "httpx>=0.27,<1.0",
+    "pyyaml>=6.0",  # `ir cowork` reads/merges goose's config.yaml + secrets.yaml
 ]
 
 # Optional on-device recorder. Adds a local HTTP daemon that intercepts CC

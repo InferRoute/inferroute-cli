@@ -156,6 +156,12 @@ def main(argv: list[str] | None = None) -> int:
         from . import data as data_mod
         return data_mod.cmd_data(rest)
 
+    if cmd == "cowork":
+        # `ir cowork` — wire goose (open-source agent desktop/CLI) to InferRoute
+        # and launch it. The point-and-click surface for everyday work.
+        from . import cowork as cowork_mod
+        return cowork_mod.cmd_cowork(rest)
+
     if cmd == "anthropic":
         # Escape hatch — no env, no key check, no inferroute touch.
         launch.launch_native_anthropic(extra_args=rest)

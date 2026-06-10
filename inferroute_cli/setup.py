@@ -43,10 +43,29 @@ def run(rest=None) -> int:
     # setup on the result — a failure here shouldn't block a logged-in user.
     add_mod.cmd_add(["recording", "--level", "full", "--yes"])
 
+    # ── Step 3: cowork (optional) ─────────────────────────────────────
+    # A desktop app for everyday (non-terminal) work, powered by the open-source
+    # agent goose. Opt-in — most CLI users won't want it, so we ask rather than
+    # default it on.
+    print("\n  [3/3] Cowork — a desktop app for InferRoute, powered by goose (optional).")
+    print("        Point-and-click way to use InferRoute for everyday work — research,")
+    print("        writing, files — no terminal needed. Open-source (github.com/block/goose).")
+    try:
+        resp = input("        Set it up now? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        resp = ""
+    if resp in ("y", "yes"):
+        from . import cowork as cowork_mod
+
+        cowork_mod.setup_cowork()
+    else:
+        print("        Skipped. Add it later with `ir cowork`.")
+
     # ── Done ──────────────────────────────────────────────────────────
     print()
     print("  ✓ You're all set. Start any time with:")
     print("      ir                   # pick a model, then launch")
     print("      ir --model minimax   # or pin one directly")
+    print("      ir cowork            # the desktop app, powered by goose")
     print()
     return 0
