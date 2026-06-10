@@ -189,3 +189,35 @@ def test_statusline_backs_off_when_user_has_statusline(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)  # cwd has no .claude, so only the home one matches
     monkeypatch.delenv("IR_NO_STATUSLINE", raising=False)
     assert _product_strip_settings_args("p", []) == []
+
+
+# --- `ir --resume` like `claude --resume`: reuse the last model, no picker ---
+# `claude --resume` never asks which model to use. To match that, ir remembers the
+# model of each launch (launch._persist_last_model) and `ir --resume` reuses it
+# (main._is_resume + launch.last_model) instead of popping the model picker.
+from inferroute_cli.launch import _persist_last_model, last_model
+from inferroute_cli.main import _is_resume
+
+
+def test_last_model_roundtrip(monkeypatch, tmp_path):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    assert last_model() is None                       # nothing launched yet
+    _persist_last_model("moonshotai/Kimi-K2.6-TEE")
+    assert last_model() == "moonshotai/Kimi-K2.6-TEE"
+    _persist_last_model("MiniMax-M2.7")               # later launch overwrites
+    assert last_model() == "MiniMax-M2.7"
+    _persist_last_model("")                           # empty is a no-op
+    assert last_model() == "MiniMax-M2.7"
+
+
+def test_is_resume_detection():
+    assert _is_resume(["--resume"])
+    assert _is_resume(["-r"])
+    assert _is_resume(["--continue"])
+    assert _is_resume(["-c"])
+    assert _is_resume(["--resume", "abc123"])         # `--resume <id>`
+    assert _is_resume(["--resume=abc123"])            # `--resume=<id>`
+    assert _is_resume(["hi", "--continue"])
+    assert not _is_resume([])
+    assert not _is_resume(["--model", "kimi", "say hi"])
+    assert not _is_resume(["--resume-foo"])           # not a real resume flag

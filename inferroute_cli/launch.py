@@ -107,6 +107,41 @@ def _print_session_link(api_url: str, session_id: str) -> None:
     sys.stderr.flush()
 
 
+def _last_model_file() -> Path:
+    return Path.home() / ".config" / "inferroute" / "last_model"
+
+
+def _persist_last_model(model_id: str) -> None:
+    """Remember the model this launch pinned, so `ir --resume` can reuse it.
+
+    `claude --resume` doesn't ask which model to use; to match that, `ir --resume`
+    must not pop the model picker — it reuses whatever you last ran. Best-effort;
+    a write failure just means `ir --resume` falls back to the picker.
+    """
+    if not model_id:
+        return
+    try:
+        target = _last_model_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(model_id.strip() + "\n")
+    except OSError:
+        pass
+
+
+def last_model() -> str | None:
+    """The canonical model_id of the most recent inferroute launch, or None.
+
+    Used by `ir --resume` / `ir --continue` to resume without the model picker.
+    Returns the stored id verbatim (it's a valid `--model` value); None if nothing
+    has been launched yet or the file is unreadable.
+    """
+    try:
+        v = _last_model_file().read_text().strip()
+        return v or None
+    except OSError:
+        return None
+
+
 def _user_has_statusline() -> bool:
     """True if the user already configures a statusLine we'd otherwise clobber.
 
@@ -471,6 +506,10 @@ def launch_through_inferroute(
 
     # Print the dashboard link BEFORE handing the terminal to claude.
     _print_session_link(creds.api_url, session_id)
+
+    # Remember this model so a later `ir --resume` can reuse it without the
+    # picker (matching `claude --resume`, which never asks for a model).
+    _persist_last_model(model_id)
 
     # A caller-supplied --permission-mode (the `permission_mode` param OR a passthrough
     # --permission-mode on the CLI) means the caller governs permissions, so we must NOT
