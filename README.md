@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://inferroute.ai">
+    <img src="https://inferroute.ai/brand/banner.png" alt="inferroute" width="760">
+  </a>
+</p>
+
 # ir — Claude Code through inferroute
 
 Tiny launcher: one command (`ir`) spawns `claude` with the model you pick
