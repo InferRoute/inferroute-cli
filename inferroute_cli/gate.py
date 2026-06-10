@@ -45,6 +45,16 @@ def _poll(api_url: str, api_key: str, timeout: float) -> dict | None:
         return None
 
 
+def grab_grant(creds, timeout: float = 10.0) -> str | None:
+    """Poll the gate; return a single-use economy admission grant if GREEN and under the per-identity
+    cap, else None (red / at cap / unreachable → caller runs at the standard rate). No jitter — this
+    is a one-shot grab for a launch, not a loop pacer."""
+    quote = _poll(creds.api_url, creds.api_key, timeout=timeout)
+    if quote and quote.get("go") and quote.get("grant"):
+        return str(quote["grant"])
+    return None
+
+
 def cmd_gate(args: list[str]) -> int:
     """Entry point for `ir gate`."""
     fail_closed = "--fail-closed" in args
@@ -66,6 +76,19 @@ def cmd_gate(args: list[str]) -> int:
             print(f'export ANTHROPIC_BASE_URL="{base}"')
             print(f'export ANTHROPIC_AUTH_TOKEN="{creds.api_key}"')
         return 0
+
+    # --print-grant: poll, and on GREEN print a single-use admission grant to stdout (exit 0),
+    # else print nothing (exit 1). For deferred loops that want to grab the grant once and pass it
+    # to the launch via IR_GRANT:  GRANT="$(ir gate --print-grant)" && IR_GRANT="$GRANT" ir --model …
+    if "--print-grant" in args:
+        creds = config.load()
+        if not creds.is_valid:
+            return 1
+        g = grab_grant(creds)
+        if g:
+            print(g)
+            return 0
+        return 1
 
     creds = config.load()
     if not creds.is_valid:

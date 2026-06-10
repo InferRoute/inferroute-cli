@@ -21,11 +21,30 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class Price:
+    """Published USD price per 1,000,000 tokens.
+
+    Three buckets, matching what the dashboard/pricing page surface:
+      * input      — fresh prompt tokens
+      * cache_read — tokens served from a prior prompt cache (much cheaper)
+      * output     — generated tokens
+
+    These are display values for the `ir choose` picker; the authoritative
+    billing rates live server-side. Keep them in sync with
+    inferroute-site/src/lib/constants.ts (CURRENT_RATE).
+    """
+    input: float
+    cache_read: float
+    output: float
+
+
+@dataclass(frozen=True)
 class ModelAlias:
     short: str           # what the user types as the --model value
     model_id: str        # what we pass to claude --model on the wire
     label: str           # one-line description shown by `ir help` / `ir choose`
     tier: str            # "fast" | "balanced" | "smart"
+    price: Price | None = None  # $/1M tokens; None = priced on your own plan
 
     @property
     def help_line(self) -> str:
@@ -34,6 +53,12 @@ class ModelAlias:
 
 
 # Order matters — `ir choose` shows them top-to-bottom.
+#
+# Prices are USD per 1M tokens (input / cache_read / output). The MiniMax M2.7,
+# Kimi K2.6 and GLM-5.1 rows mirror inferroute-site CURRENT_RATE exactly. The
+# newer/alternate models (M3, Kimi K2.5, DeepSeek V3.2) aren't on the public
+# pricing page yet — their numbers below are provisional placeholders and should
+# be reconciled once published.
 ALIASES: list[ModelAlias] = [
     ModelAlias(
         short="minimax",
@@ -45,6 +70,7 @@ ALIASES: list[ModelAlias] = [
         model_id="MiniMax-M2.7",
         label="MiniMax M2.7 (cheaper)",
         tier="fast",
+        price=Price(input=0.18, cache_read=0.036, output=0.90),
     ),
     ModelAlias(
         short="minimax-m2.7",
@@ -52,6 +78,7 @@ ALIASES: list[ModelAlias] = [
         model_id="MiniMax-M2.7",
         label="MiniMax M2.7 — cheaper/smaller direct-sub model",
         tier="fast",
+        price=Price(input=0.18, cache_read=0.036, output=0.90),
     ),
     ModelAlias(
         short="minimax-m3",
@@ -60,18 +87,21 @@ ALIASES: list[ModelAlias] = [
         model_id="MiniMax-M3",
         label="MiniMax M3 — newer/stronger flagship",
         tier="balanced",
+        price=Price(input=0.30, cache_read=0.060, output=1.50),  # provisional
     ),
     ModelAlias(
         short="kimi",
         model_id="moonshotai/Kimi-K2.6-TEE",
         label="Kimi K2.6 — strong reasoning, thinks before acting",
         tier="balanced",
+        price=Price(input=0.20, cache_read=0.020, output=0.80),
     ),
     ModelAlias(
         short="glm",
         model_id="zai-org/GLM-5.1-TEE",
         label="GLM-5.1 — solid general-purpose alternative",
         tier="balanced",
+        price=Price(input=0.15, cache_read=0.015, output=0.50),
     ),
     ModelAlias(
         # Added 2026-06-05 as a resilience alternate: when the K2.6 / GLM-5.1
@@ -80,6 +110,7 @@ ALIASES: list[ModelAlias] = [
         model_id="moonshotai/Kimi-K2.5-TEE",
         label="Kimi K2.5 — prior-gen Kimi, alternate when K2.6 is busy",
         tier="balanced",
+        price=Price(input=0.15, cache_read=0.015, output=0.60),  # provisional
     ),
     ModelAlias(
         # Added 2026-06-05: DeepSeek V3.2 on Chutes — a separate model family,
@@ -88,6 +119,7 @@ ALIASES: list[ModelAlias] = [
         model_id="deepseek-ai/DeepSeek-V3.2-TEE",
         label="DeepSeek V3.2 — strong coding/reasoning, separate capacity",
         tier="balanced",
+        price=Price(input=0.25, cache_read=0.025, output=1.00),  # provisional
     ),
 ]
 

@@ -162,6 +162,7 @@ class ScrubberConfig:
     entropy_min_len: int = 20          # generic high-entropy: min token length
     entropy_min_bits: float = 3.5      # generic high-entropy: min Shannon bits/char
     entropy_min_classes: int = 2       # require >= N of {lower,upper,digit,symbol}
+    entropy_word_skip_ceiling: float = 4.2  # below this, skip natural-language identifiers
     allowlist: list[str] = field(default_factory=list)  # never redact (literal, or /regex/)
     denylist: list[str] = field(default_factory=list)   # always redact (regex)
 
@@ -199,6 +200,31 @@ def _char_classes(s: str) -> int:
         bool(re.search(p, s))
         for p in (r"[a-z]", r"[A-Z]", r"[0-9]", r"[^A-Za-z0-9]")
     )
+
+
+# Word-segment splitter: breaks on non-letters (digits, -, _, .) AND camelCase.
+_WORD_SEG_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+")
+_VOWELS = frozenset("aeiouAEIOU")
+
+
+def looks_like_words(tok: str) -> bool:
+    """True if ``tok`` reads as a natural-language identifier — a filename,
+    slug, or camelCase name like ``2026-06-05-class-bugfix-notes`` or
+    ``UserProfileSettingsPanel`` — rather than a random secret.
+
+    The generic high-entropy heuristic over-redacts these because a hyphen
+    inflates them past the character-class gate and their entropy (~3.5–4.0)
+    overlaps real hex secrets. Structure is the discriminator: slugs decompose
+    into ≥2 vowel-containing word segments that cover most of the token's
+    letters; random secrets do not. Used ONLY in the ambiguous entropy band, so
+    it can never suppress a high-entropy random secret.
+    """
+    words = [w for w in _WORD_SEG_RE.findall(tok)
+             if len(w) >= 3 and any(c in _VOWELS for c in w)]
+    if len(words) < 2:
+        return False
+    total_letters = sum(c.isalpha() for c in tok)
+    return total_letters > 0 and sum(len(w) for w in words) / total_letters >= 0.75
 
 
 # --------------------------------------------------------------------------- #
@@ -547,7 +573,14 @@ class Scrubber:
                 continue
             if _char_classes(tok) < cfg.entropy_min_classes:
                 continue
-            if shannon_entropy(tok) < cfg.entropy_min_bits:
+            ent = shannon_entropy(tok)
+            if ent < cfg.entropy_min_bits:
+                continue
+            # Precision guard: in the ambiguous entropy band, skip tokens that
+            # read as natural-language identifiers (filenames, slugs, camelCase
+            # names) so we don't corrupt non-secret context. Above the band,
+            # everything is treated as a possible random secret.
+            if ent < cfg.entropy_word_skip_ceiling and looks_like_words(tok):
                 continue
             yield Match(m.start(), m.end(), "generic", tok, priority=40)
 
