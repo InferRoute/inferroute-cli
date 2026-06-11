@@ -100,8 +100,10 @@ class Config:
 
     # ── Local decision recorder ──────────────────────────────────────────
     # The privacy-local corpus of the user's model choices + how they turned
-    # out. Replaces the old routing decision-log. Everything stays under
-    # record_dir on the user's machine; nothing is uploaded.
+    # out. Replaces the old routing decision-log. The corpus stays under
+    # record_dir on the user's machine; the daemon emits only a one-way hash of
+    # each turn upstream (x-inferroute-content-hash — a fingerprint, never text;
+    # see proxy._visibility_headers + shared-docs/inferroute/recording-visibility-spec.md).
     # See shared-docs/inferroute/local-decision-recorder-spec.md.
     #   level "off"      → record nothing
     #   level "metadata" → choice/outcome/signal events only (no prompt text)

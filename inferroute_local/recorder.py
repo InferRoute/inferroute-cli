@@ -23,6 +23,11 @@ Exception: per-session COST (`sessions/<sid>.cost`, a single USD number — the
 price the user paid, no content) is captured at EVERY level including "off",
 because it's the product's headline number and isn't corpus data. See note_cost.
 
+What leaves the machine: the corpus (events/blobs) never does. Separately, when a
+corpus IS being recorded (metadata/full), the daemon emits a one-way hash of each
+turn upstream for fleet aggregates — a fingerprint, never content (see
+new_user_block_hash + proxy._visibility_headers; recording-visibility-spec.md).
+
 Storage layout
 --------------
   <base>/events/events-YYYY-MM-DD.jsonl     append-only event stream
@@ -102,6 +107,22 @@ def _last_user_block(messages: list):
         if isinstance(m, dict) and m.get("role") == "user":
             return m
     return None
+
+
+def new_user_block_hash(body: dict) -> Optional[str]:
+    """SHA-256 of the latest user message block of a request.
+
+    Uses the SAME canonicalization as the local corpus (`_block_bytes` →
+    `_sha256`, identical to what `record_choice` stores as `new_user_block_hash`),
+    so a value emitted upstream by the daemon EQUALS the one stored on disk. That
+    identity is what lets the server-side content index line up with the local
+    corpus (dedup counts, export verification) — and it holds across the TEE
+    transition, since the daemon computes it locally either way. Returns None when
+    there's no user block.
+    """
+    messages = (body or {}).get("messages") or []
+    block = _last_user_block(messages)
+    return _sha256(_block_bytes(block)) if block is not None else None
 
 
 class Recorder:

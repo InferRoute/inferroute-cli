@@ -26,7 +26,7 @@ from typing import AsyncIterator, Optional
 import httpx
 
 from .config import Config
-from .recorder import Recorder
+from .recorder import Recorder, new_user_block_hash
 
 logger = logging.getLogger("inferroute_local")
 
@@ -75,7 +75,9 @@ class InferrouteProxy:
         start = time.monotonic()
 
         try:
-            status, resp_headers, stream = await self._forward(body, request_headers)
+            status, resp_headers, stream = await self._forward(
+                body, request_headers, self._visibility_headers(body)
+            )
         except httpx.HTTPError as e:
             logger.warning(f"upstream unreachable ({e})")
             self.recorder.record_outcome(
@@ -101,11 +103,34 @@ class InferrouteProxy:
     # Forward upstream (to the inferroute cloud, which serves the pinned model)
     # -------------------------------------------------------------------------
 
+    def _visibility_headers(self, body: dict) -> dict[str, str]:
+        """Recording DISPOSITION + a content FINGERPRINT (never content) for the
+        cloud, so fleet aggregates work — and keep working under TEE, where the
+        cloud can't hash transit. Emitted here because the daemon is the only
+        component that sees plaintext on the user's machine.
+
+          x-inferroute-recording: full | metadata | off   (always — `off` means the
+              daemon is up in cost-only mode, distinct from no-daemon)
+          x-inferroute-content-hash: <sha256>             (only when a corpus is
+              being recorded; equals the locally-stored hash — see
+              recorder.new_user_block_hash)
+        """
+        level = self.recorder.level if self.recorder.level in ("full", "metadata", "off") else "off"
+        out = {"x-inferroute-recording": level}
+        if level in ("metadata", "full"):
+            h = new_user_block_hash(body)
+            if h:
+                out["x-inferroute-content-hash"] = h
+        return out
+
     async def _forward(
-        self, body: dict, request_headers: dict[str, str]
+        self, body: dict, request_headers: dict[str, str],
+        extra_headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, str], AsyncIterator[bytes]]:
         url = f"{self.config.inferroute_server_url}/v1/messages"
         headers = _forward_headers(request_headers)
+        if extra_headers:
+            headers.update(extra_headers)  # bypass the allow-list — we set these
         return await self._stream(url, body, headers)
 
     # -------------------------------------------------------------------------

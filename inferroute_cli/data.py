@@ -1,8 +1,9 @@
 """`ir data` — inspect, export, or wipe your LOCAL recorded corpus.
 
 Everything the recorder writes lives under ~/.inferroute (or
-$INFERROUTE_RECORD_DIR) on your own machine. It is never uploaded; we never see
-it. These verbs make that promise verifiable:
+$INFERROUTE_RECORD_DIR) on your own machine — the corpus is never uploaded.
+(inferroute keeps only a one-way hash of each turn — a fingerprint, never the
+text.) These verbs make the local-corpus promise verifiable:
 
     ir data show            what's been recorded (counts, models, size)
     ir data export <dir>    copy the shareable (metadata) layer somewhere
@@ -96,7 +97,7 @@ def _show() -> int:
             continue
 
     print(f"\n  Local recorded corpus — {base}")
-    print(f"  (private to this machine; never uploaded)\n")
+    print(f"  (corpus stays on this machine; inferroute keeps only one-way hashes, never text)\n")
     print(f"    days on disk     {len(files)}")
     print(f"    sessions         {len(sessions)}")
     print(f"    choices          {kinds.get('choice', 0)}")

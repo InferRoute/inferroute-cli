@@ -4,7 +4,8 @@ Recording is fully local and fully private. When enabled, a small daemon runs
 on localhost:5005; `ir` routes your sessions through it so it can log, on YOUR
 machine only, which model you picked for each task and how the turn went. That
 local corpus is yours — to inspect (`ir data show`), export, or wipe
-(`ir data wipe`). It is never uploaded; we never see it.
+(`ir data wipe`). The corpus is never uploaded; inferroute keeps only a one-way
+hash of each turn (a fingerprint, never the text).
 
 What this does, in order:
   1. Ask how much to record. Default: full — keeps the prompt text locally, which
@@ -162,8 +163,9 @@ def _prompt_level(skip_prompt: bool) -> str:
         • which model you pick for each task
         • the prompt + how the turn went
 
-      ✔ Stays in ~/.inferroute on your computer — right next to your code.
-      ✔ Never uploaded. We never see it. It is yours.
+      ✔ The corpus stays in ~/.inferroute on your computer — never uploaded.
+      ✔ inferroute keeps only a one-way hash of each turn — a fingerprint, never
+        the text. The prompts & responses themselves never leave this machine.
       ✔ Inspect any time:  ir data show
       ✔ Delete any time:   ir data wipe
 
@@ -393,7 +395,8 @@ def _print_done_banner(level: str) -> None:
         print("    ir remove recording             # stop the daemon entirely")
     else:
         print(f"  Done. Local recording is ON (level: {level}).")
-        print("  Everything stays in ~/.inferroute on this machine. We never see it.")
+        print("  The corpus stays in ~/.inferroute on this machine; inferroute keeps")
+        print("  only a one-way hash of each turn (a fingerprint, never the text).")
         print("  Verify / manage:")
         print("    ir data show     # what's been recorded (counts, models, size)")
         print("    ir data wipe     # delete it all")

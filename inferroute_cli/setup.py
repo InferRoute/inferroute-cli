@@ -36,7 +36,8 @@ def run(rest=None) -> int:
     # setup instead of making the user answer a prompt. Fully reversible later:
     #   ir add recording --level minimal   (lighter)
     #   ir remove recording                (off)
-    print("\n  [2/2] Enabling local recording — full, private, stays on this machine.")
+    print("\n  [2/2] Enabling local recording — full. The corpus stays on this machine;")
+    print("        inferroute keeps only a one-way hash of each turn (never the text).")
     print("        Change later: `ir add recording --level minimal` · turn off: `ir remove recording`")
     from . import add as add_mod
     # --level full + --yes → no level prompt, no pip-install confirm. We don't gate
