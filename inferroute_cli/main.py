@@ -101,18 +101,17 @@ def main(argv: list[str] | None = None) -> int:
     # we open the picker. (No auto-route — the user always chooses.)
     if not args or args[0].startswith("-"):
         user_model, passthrough = _extract_model_override(args)
-        # Launch directly (no picker) when the user either pinned a model OR is
-        # resuming/continuing — `ir --resume` should behave like `claude --resume`,
-        # which never asks for a model. On resume we reuse the last-used model so
-        # the proxy keeps routing (and the haiku slot / auto-compact window stay
-        # pinned); an explicit `--model` always wins. With no model to fall back on
-        # (resume before any prior launch) we drop to the picker, which still
-        # carries the resume flag through to claude.
-        model = user_model
-        if model is None and _is_resume(passthrough):
-            model = launch.last_model()
-        if model is not None:
-            # Explicit pin or resume-with-remembered-model → launch directly.
+        # Resume/continue → resume.py: its own menu (inferroute sessions, annotated
+        # with model · lane · cost, shown apart from native ones) for bare
+        # `--resume`, the newest session for `-c`, or an explicit id — all resumed
+        # cumulatively (same dashboard link + cost). `claude --resume` never asks
+        # for a model, so neither do we; an explicit `--model` is honored as an
+        # override (resume but switch model).
+        if _is_resume(passthrough):
+            from . import resume as resume_mod
+            return resume_mod.handle(passthrough, model_override=user_model)
+        if user_model is not None:
+            # Explicit pin: `ir --model X [claude flags]` → launch directly.
             creds = config.load()
             if not creds.is_valid:
                 sys.stderr.write(
@@ -120,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
                     "  Run `ir login` to set one up, or `ir help` for options.\n\n"
                 )
                 return 2
-            launch.launch_through_inferroute(model, creds, extra_args=passthrough)
+            launch.launch_through_inferroute(user_model, creds, extra_args=passthrough)
             return 0  # never reached — exec replaces process
         # No model specified → interactive picker so the user chooses one.
         from . import choose as choose_mod

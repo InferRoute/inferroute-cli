@@ -77,34 +77,22 @@ def _session_url(api_url: str, session_id: str) -> str:
     return f"{site.rstrip('/')}/session/{session_id}"
 
 
-def _print_session_link(api_url: str, session_id: str) -> None:
-    """Print a clickable URL to view this session's traffic on the dashboard.
+def _persist_session_link(api_url: str, session_id: str) -> None:
+    """Persist this session's dashboard URL to ~/.config/inferroute/last_session
+    for retrieval via `ir status` / shell history.
 
-    Also persist the URL to ~/.config/inferroute/last_session for retrieval via
-    `ir status` or shell history.
-
-    NOTE: this pre-launch print is NOT durable. Claude Code's fullscreen TUI
-    (alt-screen, enabled via `/tui fullscreen` or CLAUDE_CODE_NO_FLICKER=1) hides
-    everything printed before launch for the whole session, and even the inline
-    renderer scrolls it off-screen as the conversation grows. The persistent copy
-    of this link lives in the status line — see `_product_strip_settings_args`.
+    We deliberately do NOT print the link to the terminal before launch anymore:
+    it's already pinned in the status line for the whole session (rendered inside
+    the TUI — see `_product_strip_settings_args`), and the pre-launch print wasn't
+    durable anyway (CC's fullscreen TUI hides it, the inline renderer scrolls it
+    away). No point showing it in two places.
     """
-    url = _session_url(api_url, session_id)
-
-    # Persist for later retrieval (e.g. `ir status`, or user copy-paste).
     try:
         target = Path.home() / ".config" / "inferroute" / "last_session"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(url + "\n")
+        target.write_text(_session_url(api_url, session_id) + "\n")
     except OSError:
         pass
-
-    # Print to stderr so Claude Code's TUI screen-clear (on stdout) doesn't
-    # immediately wipe it. Most terminals keep stderr in scrollback.
-    sys.stderr.write(
-        f"\n  ➜ View this session at\n    \033[36m{url}\033[0m\n\n"
-    )
-    sys.stderr.flush()
 
 
 def _last_model_file() -> Path:
@@ -140,6 +128,70 @@ def last_model() -> str | None:
         return v or None
     except OSError:
         return None
+
+
+_RESUME_ARGV_FLAGS = ("--resume", "-r", "--continue", "-c")
+
+
+def _argv_has_resume(args: list[str]) -> bool:
+    return any(a in _RESUME_ARGV_FLAGS or a.startswith("--resume=") for a in args)
+
+
+def _launch_index_file() -> Path:
+    return Path.home() / ".config" / "inferroute" / "launches.jsonl"
+
+
+def _record_launch(session_id: str, model_id: str, lane: str) -> None:
+    """Append a one-line record of this fresh launch to the ir session index.
+
+    Lets `ir --resume`'s menu tell YOUR inferroute sessions (id → model/lane/cwd)
+    apart from plain-`claude` ones and resume them on the right model. Append-only,
+    last-wins on read; best-effort (a write failure just means this session won't
+    be labelled in the menu). Stays local under ~/.config/inferroute.
+    """
+    import json
+    import time
+
+    try:
+        rec = {
+            "id": session_id,
+            "model": model_id,
+            "lane": lane,
+            "cwd": os.getcwd(),
+            "ts": time.time(),
+        }
+        target = _launch_index_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except (OSError, ValueError):
+        pass
+
+
+def launch_index() -> dict[str, dict]:
+    """Read the ir session index into `{session_id: record}` (last write wins).
+
+    Each record: {id, model, lane, cwd, ts}. Empty dict if the index is absent or
+    unreadable. Used by resume.py to mark/sort inferroute sessions in the menu.
+    """
+    import json
+
+    out: dict[str, dict] = {}
+    try:
+        for line in _launch_index_file().read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            sid = rec.get("id")
+            if isinstance(sid, str) and sid:
+                out[sid] = rec
+    except OSError:
+        return {}
+    return out
 
 
 def _user_has_statusline() -> bool:
@@ -384,8 +436,19 @@ def launch_through_inferroute(
     creds: Credentials,
     extra_args: Iterable[str] = (),
     permission_mode: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Exec `claude` with inferroute env + --model pinned.
+
+    `session_id` ties this launch to one inferroute session (dashboard link +
+    cost file + the `x-inferroute-session` tag on every request):
+      * None (a FRESH launch) → mint a new id AND pass it to claude as
+        `--session-id`, so Claude Code's own session id EQUALS the inferroute id.
+        That single shared id is what lets a later resume be cumulative.
+      * given (a RESUME, from resume.py) → reuse that id and do NOT pass
+        `--session-id` (the caller already put `--resume <id>` in extra_args).
+        Tagging with the original id makes the resumed turns land on the same
+        dashboard session and keep climbing the same cost file.
 
     Auth strategy:
       * ANTHROPIC_BASE_URL  → inferroute (so chat traffic routes here)
@@ -467,7 +530,9 @@ def launch_through_inferroute(
     # request — including background "haiku" chores — merged with auth headers.
     # MERGE with any value the user already set (newline-separated) rather than
     # clobbering it.
-    session_id = uuid.uuid4().hex
+    resuming = session_id is not None
+    if session_id is None:
+        session_id = uuid.uuid4().hex
     _headers = []
     _existing = env.get("ANTHROPIC_CUSTOM_HEADERS", "").strip()
     if _existing:
@@ -504,12 +569,20 @@ def launch_through_inferroute(
     if economy:
         _print_economy_banner()
 
-    # Print the dashboard link BEFORE handing the terminal to claude.
-    _print_session_link(creds.api_url, session_id)
+    # Persist the dashboard link for `ir status` / copy-paste. It's shown to the
+    # user via the status line (pinned for the whole session), not printed here.
+    _persist_session_link(creds.api_url, session_id)
 
     # Remember this model so a later `ir --resume` can reuse it without the
     # picker (matching `claude --resume`, which never asks for a model).
     _persist_last_model(model_id)
+
+    # On a fresh launch, record this session in the ir index (id → model/lane/cwd)
+    # so `ir --resume`'s menu can list YOUR inferroute sessions distinctly from
+    # plain-claude ones and resume them on their original model. (Resumes reuse an
+    # existing id, already indexed, so only fresh launches add an entry.)
+    if not resuming:
+        _record_launch(session_id, model_id, "economy" if economy else "standard")
 
     # A caller-supplied --permission-mode (the `permission_mode` param OR a passthrough
     # --permission-mode on the CLI) means the caller governs permissions, so we must NOT
@@ -529,11 +602,23 @@ def launch_through_inferroute(
     # daemon isn't running (file never appears) — see _strip_command.
     cost_file = _record_sessions_dir() / f"{session_id}.cost"
     status_args = _product_strip_settings_args(prefix, extra, cost_file)
+    # On a fresh launch, force claude's session id to equal our session_id so the
+    # transcript, the dashboard link, and the cost file share one id (the basis
+    # for cumulative resume). Skip when resuming (extra already has `--resume
+    # <id>`) or when the user manages the id/resume themselves.
+    sid_args: list[str] = []
+    if (
+        not resuming
+        and not any(a == "--session-id" or a.startswith("--session-id=") for a in extra)
+        and not _argv_has_resume(extra)
+    ):
+        sid_args = ["--session-id", session_id]
     argv = [
         binary,
         *flags,
         "--model", model_id,
         *status_args,
+        *sid_args,
         *extra,
     ]
     # execvpe replaces the current process — claude inherits our terminal.
