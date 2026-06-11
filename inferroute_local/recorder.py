@@ -14,10 +14,14 @@ computed offline over this log. We record raw signals, never verdicts.
 Privacy
 -------
 Everything stays under `base_dir` on the user's machine. Level:
-  - off      : nothing written
+  - off      : no events, no blobs
   - metadata : events only — hashes, counts, model ids; NO prompt text, NO blobs
   - full     : also a content-addressed blob store of raw payloads (prompt text,
                responses) so the corpus can train richer models later
+
+Exception: per-session COST (`sessions/<sid>.cost`, a single USD number — the
+price the user paid, no content) is captured at EVERY level including "off",
+because it's the product's headline number and isn't corpus data. See note_cost.
 
 Storage layout
 --------------
@@ -122,6 +126,10 @@ class Recorder:
 
         self.events_dir = self.base_dir / "events"
         self.blobs_dir = self.base_dir / "blobs"
+        # Per-session cumulative-cost files (`<sid>.cost`, full-precision USD)
+        # that the `ir` status line reads to show the REAL session cost — no
+        # network. See inferroute_cli.launch._strip_command.
+        self.sessions_dir = self.base_dir / "sessions"
 
         self._buf: list[str] = []
         self._lock = threading.Lock()
@@ -130,10 +138,14 @@ class Recorder:
         # Per-session last chosen model → lets us label provenance cheaply
         # (first sight = explicit, same = sticky, changed = switch).
         self._session_model: dict[str, str] = {}
+        # Per-session running cost total (USD), authoritative in-process; seeded
+        # from disk on first touch so it survives a daemon restart mid-session.
+        self._session_cost: dict[str, float] = {}
 
         if self.enabled:
             try:
                 self.events_dir.mkdir(parents=True, exist_ok=True)
+                self.sessions_dir.mkdir(parents=True, exist_ok=True)
                 if self.level == "full":
                     self.blobs_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
@@ -243,6 +255,11 @@ class Recorder:
                     "tokens_out": usage.get("output_tokens"),
                     "cache_read_tokens": usage.get("cache_read_input_tokens"),
                     "cache_creation_tokens": usage.get("cache_creation_input_tokens"),
+                    # Server-computed real cost for this turn (USD), passed through
+                    # by the proxy from usage.cost. Same number the dashboard bills.
+                    # (The per-session running total is maintained by note_cost,
+                    # which the proxy calls independently of record_level.)
+                    "cost_usd": usage.get("cost"),
                     "stop_reason": stop_reason,
                     "error_kind": error_kind,
                     "response_block_hash": resp_hash,
@@ -325,6 +342,51 @@ class Recorder:
         first = messages[0] if messages else {}
         basis = _block_bytes(first)[:500]
         return "ch_" + _sha256(basis)[:16]
+
+    def note_cost(self, session_id: str, cost_usd) -> None:
+        """Add this turn's USD cost to the session's running total and write it to
+        `<sessions>/<sid>.cost` (full-precision plain text) for the status line.
+
+        Independent of `record_level` ON PURPOSE: the cost is a single content-free
+        number — the price the user paid — not part of the prompt/response corpus.
+        So it's captured whenever the daemon proxies a turn, even at level "off"
+        ("store nothing, but still show the price"). The rich corpus (events,
+        blobs) stays gated by `record_level`; only this one number doesn't. The
+        daemon merely has to be running — see inferroute_cli.launch._strip_command
+        for why the daemon is the only place this can be captured.
+
+        Authoritative in-process (`_session_cost`); seeded once from disk so a
+        mid-session daemon restart resumes the total instead of resetting it.
+        Best-effort and fail-soft — never raises into the request path. Only acts
+        on a real, positive float cost and a filename-safe session id.
+        """
+        if not session_id:
+            return
+        if not isinstance(cost_usd, (int, float)) or isinstance(cost_usd, bool):
+            return
+        if cost_usd <= 0:
+            return
+        # session ids from ir are uuid hex; guard anyway so a weird header can't
+        # escape the sessions dir.
+        if not all(c.isalnum() or c in "_.-" for c in session_id):
+            return
+        try:
+            path = self.sessions_dir / f"{session_id}.cost"
+            with self._lock:
+                cur = self._session_cost.get(session_id)
+                if cur is None:
+                    try:
+                        cur = float(path.read_text().strip())
+                    except (OSError, ValueError):
+                        cur = 0.0
+                cur += float(cost_usd)
+                self._session_cost[session_id] = cur
+                self.sessions_dir.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(".cost.tmp")
+                tmp.write_text(f"{cur:.6f}")
+                tmp.replace(path)
+        except Exception as e:
+            logger.debug(f"session cost bump skipped ({e})")
 
     def _provenance(self, session_id: str, chosen: str) -> str:
         last = self._session_model.get(session_id)

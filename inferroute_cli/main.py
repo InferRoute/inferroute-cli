@@ -51,6 +51,17 @@ def _extract_model_override(args: list[str]) -> tuple[str | None, list[str]]:
     return resolved, out
 
 
+# Claude Code's resume/continue flags. When one is present and the user pinned
+# no model, `ir` resumes straight through inferroute on the last-used model —
+# no model picker — so `ir --resume` feels like `claude --resume`.
+_RESUME_FLAGS = frozenset({"--resume", "-r", "--continue", "-c"})
+
+
+def _is_resume(args: list[str]) -> bool:
+    """True if argv carries a resume/continue flag (`--resume [id]`, `-r`, `--continue`, `-c`)."""
+    return any(a in _RESUME_FLAGS or a.startswith("--resume=") for a in args)
+
+
 def _resolve_model_name(name: str) -> str:
     """`minimax` → `MiniMax-M2.7`. Unknown names pass through verbatim.
 
@@ -90,6 +101,15 @@ def main(argv: list[str] | None = None) -> int:
     # we open the picker. (No auto-route — the user always chooses.)
     if not args or args[0].startswith("-"):
         user_model, passthrough = _extract_model_override(args)
+        # Resume/continue → resume.py: its own menu (inferroute sessions, annotated
+        # with model · lane · cost, shown apart from native ones) for bare
+        # `--resume`, the newest session for `-c`, or an explicit id — all resumed
+        # cumulatively (same dashboard link + cost). `claude --resume` never asks
+        # for a model, so neither do we; an explicit `--model` is honored as an
+        # override (resume but switch model).
+        if _is_resume(passthrough):
+            from . import resume as resume_mod
+            return resume_mod.handle(passthrough, model_override=user_model)
         if user_model is not None:
             # Explicit pin: `ir --model X [claude flags]` → launch directly.
             creds = config.load()

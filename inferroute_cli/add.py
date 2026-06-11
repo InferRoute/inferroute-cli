@@ -7,9 +7,10 @@ local corpus is yours — to inspect (`ir data show`), export, or wipe
 (`ir data wipe`). It is never uploaded; we never see it.
 
 What this does, in order:
-  1. Ask how much to record (full / minimal / no). Default: full — it keeps the
-     prompt text locally, which is what lets it learn your preferences; it never
-     leaves the machine.
+  1. Ask how much to record. Default: full — keeps the prompt text locally, which
+     is what lets it learn your preferences; it never leaves the machine.
+     'cost-only' (level=off) records NOTHING but still runs the daemon so the
+     status line can show your real per-session cost.
   2. Install the `[local]` deps (fastapi, uvicorn) if missing.
   3. Install a systemd user unit (Linux) / launchd plist (macOS) that runs the
      recorder daemon, with the chosen record level baked in, and start it.
@@ -105,10 +106,18 @@ def _add_recording(ns) -> int:
     print("  ───────────────────")
 
     level = ns.level or _prompt_level(ns.yes)
-    if level == "off":
-        print("\n  No recording installed. Nothing was changed.")
-        print("  `ir` keeps working as the lightweight launcher.")
+    if level == "abort":
+        print("\n  Nothing was changed. `ir` keeps working as the lightweight launcher.")
+        print("  (Already have the daemon? `ir remove recording` takes it off.)")
         return 0
+    # level == "off" is NOT "install nothing" — it's COST-ONLY: the daemon still
+    # runs (so the status line can show the real session cost) but records no
+    # corpus. The only way to have no daemon at all is to never add it / remove it.
+    if level == "off":
+        print("\n  Cost-only mode: the daemon will run to show this machine's real")
+        print("  session cost in Claude Code's status line, and record NOTHING else")
+        print("  (no prompts, no responses, no events). Turn off entirely with")
+        print("  `ir remove recording`.")
 
     # Step 1: ensure the [local] deps are installed.
     if not _local_extra_installed():
@@ -125,12 +134,12 @@ def _add_recording(ns) -> int:
     # Step 2: install + start the service with the chosen record level.
     if ns.no_service:
         print("  [2/3] Skipping service install (--no-service).")
-        print(f"        Run: INFERROUTE_RECORD_LEVEL={level} inferroute-daemon serve")
+        print(f"        Run: INFERROUTE_RECORD_LEVEL={level} inferroute-daemon")
     else:
         rc = _install_user_service(level)
         if rc != 0:
             print("        ✗ Service install failed. You can run the daemon manually:")
-            print(f"          INFERROUTE_RECORD_LEVEL={level} inferroute-daemon serve")
+            print(f"          INFERROUTE_RECORD_LEVEL={level} inferroute-daemon")
 
     # Step 3: shell rc edit.
     if ns.no_shell_edit:
@@ -161,19 +170,21 @@ def _prompt_level(skip_prompt: bool) -> str:
       'full' keeps the prompt text, which is what actually lets it learn your
       preferences later — and it never leaves this machine. 'minimal' keeps only
       the model choice + outcome (no prompt text), which is lighter but can't
-      train a personal router.
+      train a personal router. 'cost-only' records NOTHING — the daemon just runs
+      so the status line can show your real session cost.
 
       Record locally to build your own router?
         [1] Yes — full: choices, outcomes + prompt text   (recommended)
         [2] Yes — minimal: choices + outcomes only, no prompt text
-        [3] No  — don't record
+        [3] No  — cost-only: show real cost, store nothing
+        [4] Don't install the daemon at all
     """))
     try:
         ans = input("        Choose [1]: ").strip()
     except (KeyboardInterrupt, EOFError):
         print()
-        return "off"
-    return {"": "full", "1": "full", "2": "metadata", "3": "off"}.get(ans, "full")
+        return "abort"
+    return {"": "full", "1": "full", "2": "metadata", "3": "off", "4": "abort"}.get(ans, "full")
 
 
 # ----- Step 1 helpers --------------------------------------------------------
@@ -220,7 +231,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={daemon_path} serve --port 5005
+ExecStart={daemon_path} --port 5005
 Restart=on-failure
 RestartSec=3
 
@@ -244,7 +255,7 @@ def _install_user_service(level: str) -> int:
     if sysname == "Darwin":
         return _install_launchd_plist(level)
     print(f"        Unsupported platform for auto-start: {sysname}")
-    print(f"        Run: INFERROUTE_RECORD_LEVEL={level} inferroute-daemon serve")
+    print(f"        Run: INFERROUTE_RECORD_LEVEL={level} inferroute-daemon")
     return 1
 
 
@@ -305,7 +316,6 @@ def _install_launchd_plist(level: str) -> int:
           <key>ProgramArguments</key>
           <array>
             <string>{daemon_path}</string>
-            <string>serve</string>
             <string>--port</string><string>5005</string>
           </array>
           <key>EnvironmentVariables</key>
@@ -375,10 +385,17 @@ def _print_env_var_block() -> None:
 
 def _print_done_banner(level: str) -> None:
     print()
-    print(f"  Done. Local recording is ON (level: {level}).")
-    print("  Everything stays in ~/.inferroute on this machine. We never see it.")
-    print("  Verify / manage:")
-    print("    ir data show     # what's been recorded (counts, models, size)")
-    print("    ir data wipe     # delete it all")
-    print("    ir remove recording")
+    if level == "off":
+        print("  Done. Cost-only daemon is ON (recording corpus: OFF).")
+        print("  Your real session cost now shows in Claude Code's status line.")
+        print("  Nothing else is stored. Manage:")
+        print("    ir add recording --level full   # also record, to train a router")
+        print("    ir remove recording             # stop the daemon entirely")
+    else:
+        print(f"  Done. Local recording is ON (level: {level}).")
+        print("  Everything stays in ~/.inferroute on this machine. We never see it.")
+        print("  Verify / manage:")
+        print("    ir data show     # what's been recorded (counts, models, size)")
+        print("    ir data wipe     # delete it all")
+        print("    ir remove recording")
     print()

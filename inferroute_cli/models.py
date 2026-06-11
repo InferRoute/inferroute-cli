@@ -132,6 +132,25 @@ def get(short: str) -> ModelAlias | None:
     return None
 
 
+def short_for_model_id(model_id: str) -> str | None:
+    """Reverse of `_resolve_model_name`: canonical model_id → friendly short.
+
+    Used to render the relaunch hint (`ir --model kimi`) from the resolved
+    model_id that reaches `launch.py` — by then the short name the user typed is
+    gone. Returns the FIRST alias whose model_id matches (ALIASES order), so
+    `MiniMax-M2.7` maps back to bare `minimax` rather than `minimax-m2.7`.
+    Returns None for ids we don't alias (callers fall back to the id verbatim,
+    which is itself a valid `ir --model <id>` value since unknown names pass
+    through).
+    """
+    if not model_id:
+        return None
+    for a in ALIASES:
+        if a.model_id == model_id:
+            return a.short
+    return None
+
+
 def all_aliases() -> list[ModelAlias]:
     return list(ALIASES)
 

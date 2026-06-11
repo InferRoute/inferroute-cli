@@ -77,34 +77,134 @@ def _session_url(api_url: str, session_id: str) -> str:
     return f"{site.rstrip('/')}/session/{session_id}"
 
 
-def _print_session_link(api_url: str, session_id: str) -> None:
-    """Print a clickable URL to view this session's traffic on the dashboard.
+def _persist_session_link(api_url: str, session_id: str) -> None:
+    """Persist this session's dashboard URL to ~/.config/inferroute/last_session
+    for retrieval via `ir status` / shell history.
 
-    Also persist the URL to ~/.config/inferroute/last_session for retrieval via
-    `ir status` or shell history.
-
-    NOTE: this pre-launch print is NOT durable. Claude Code's fullscreen TUI
-    (alt-screen, enabled via `/tui fullscreen` or CLAUDE_CODE_NO_FLICKER=1) hides
-    everything printed before launch for the whole session, and even the inline
-    renderer scrolls it off-screen as the conversation grows. The persistent copy
-    of this link lives in the status line — see `_statusline_settings_args`.
+    We deliberately do NOT print the link to the terminal before launch anymore:
+    it's already pinned in the status line for the whole session (rendered inside
+    the TUI — see `_product_strip_settings_args`), and the pre-launch print wasn't
+    durable anyway (CC's fullscreen TUI hides it, the inline renderer scrolls it
+    away). No point showing it in two places.
     """
-    url = _session_url(api_url, session_id)
-
-    # Persist for later retrieval (e.g. `ir status`, or user copy-paste).
     try:
         target = Path.home() / ".config" / "inferroute" / "last_session"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(url + "\n")
+        target.write_text(_session_url(api_url, session_id) + "\n")
     except OSError:
         pass
 
-    # Print to stderr so Claude Code's TUI screen-clear (on stdout) doesn't
-    # immediately wipe it. Most terminals keep stderr in scrollback.
-    sys.stderr.write(
-        f"\n  ➜ View this session at\n    \033[36m{url}\033[0m\n\n"
-    )
-    sys.stderr.flush()
+
+def _new_session_id() -> str:
+    """A fresh session id for a launch.
+
+    MUST be a canonical hyphenated UUID (8-4-4-4-12). We pass it to
+    `claude --session-id`, which validates it as a UUID and REJECTS a bare 32-char
+    hex string ("Error: Invalid session ID. Must be a valid UUID."). It's also the
+    `x-inferroute-session` tag, the dashboard slug, and the cost-file name — all of
+    which are happy with the hyphenated form, and it matches Claude Code's own
+    session-id format (so transcripts line up for resume).
+    """
+    return str(uuid.uuid4())
+
+
+def _last_model_file() -> Path:
+    return Path.home() / ".config" / "inferroute" / "last_model"
+
+
+def _persist_last_model(model_id: str) -> None:
+    """Remember the model this launch pinned, so `ir --resume` can reuse it.
+
+    `claude --resume` doesn't ask which model to use; to match that, `ir --resume`
+    must not pop the model picker — it reuses whatever you last ran. Best-effort;
+    a write failure just means `ir --resume` falls back to the picker.
+    """
+    if not model_id:
+        return
+    try:
+        target = _last_model_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(model_id.strip() + "\n")
+    except OSError:
+        pass
+
+
+def last_model() -> str | None:
+    """The canonical model_id of the most recent inferroute launch, or None.
+
+    Used by `ir --resume` / `ir --continue` to resume without the model picker.
+    Returns the stored id verbatim (it's a valid `--model` value); None if nothing
+    has been launched yet or the file is unreadable.
+    """
+    try:
+        v = _last_model_file().read_text().strip()
+        return v or None
+    except OSError:
+        return None
+
+
+_RESUME_ARGV_FLAGS = ("--resume", "-r", "--continue", "-c")
+
+
+def _argv_has_resume(args: list[str]) -> bool:
+    return any(a in _RESUME_ARGV_FLAGS or a.startswith("--resume=") for a in args)
+
+
+def _launch_index_file() -> Path:
+    return Path.home() / ".config" / "inferroute" / "launches.jsonl"
+
+
+def _record_launch(session_id: str, model_id: str, lane: str) -> None:
+    """Append a one-line record of this fresh launch to the ir session index.
+
+    Lets `ir --resume`'s menu tell YOUR inferroute sessions (id → model/lane/cwd)
+    apart from plain-`claude` ones and resume them on the right model. Append-only,
+    last-wins on read; best-effort (a write failure just means this session won't
+    be labelled in the menu). Stays local under ~/.config/inferroute.
+    """
+    import json
+    import time
+
+    try:
+        rec = {
+            "id": session_id,
+            "model": model_id,
+            "lane": lane,
+            "cwd": os.getcwd(),
+            "ts": time.time(),
+        }
+        target = _launch_index_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except (OSError, ValueError):
+        pass
+
+
+def launch_index() -> dict[str, dict]:
+    """Read the ir session index into `{session_id: record}` (last write wins).
+
+    Each record: {id, model, lane, cwd, ts}. Empty dict if the index is absent or
+    unreadable. Used by resume.py to mark/sort inferroute sessions in the menu.
+    """
+    import json
+
+    out: dict[str, dict] = {}
+    try:
+        for line in _launch_index_file().read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            sid = rec.get("id")
+            if isinstance(sid, str) and sid:
+                out[sid] = rec
+    except OSError:
+        return {}
+    return out
 
 
 def _user_has_statusline() -> bool:
@@ -134,18 +234,83 @@ def _user_has_statusline() -> bool:
     return False
 
 
-def _statusline_settings_args(
-    api_url: str,
-    session_id: str,
-    economy: bool,
-    extra_args: list[str],
-) -> list[str]:
-    """`['--settings', <json>]` pinning the session link to CC's status line, or [].
+def _model_for_statusline(extra_args: list[str]) -> str | None:
+    """The `--model X` value the user passed through (verbatim X), or None.
 
-    Claude Code's fullscreen TUI hides anything printed before launch, and the
-    inline renderer eventually scrolls it away — so the pre-launch banner alone
-    isn't a durable home for the dashboard link. A statusLine keeps it visible at
-    the bottom of the screen for the entire session, in BOTH render modes.
+    Only used by the NATIVE path for the strip header / relaunch hint — the gate
+    path already has its resolved model_id. Native passes args straight to
+    claude, so X is whatever claude understands (`sonnet`, `claude-opus-4-8`, …)
+    and we echo it back unchanged.
+    """
+    i = 0
+    while i < len(extra_args):
+        a = extra_args[i]
+        if a == "--model" and i + 1 < len(extra_args):
+            return extra_args[i + 1]
+        if a.startswith("--model="):
+            return a.split("=", 1)[1]
+        i += 1
+    return None
+
+
+def _record_sessions_dir() -> Path:
+    """Where the on-device recorder daemon writes per-session cost files.
+
+    Mirrors inferroute_local.config.Config.record_dir resolution
+    (INFERROUTE_RECORD_DIR → INFERROUTE_LOG_DIR → ~/.inferroute) so the status
+    line reads the same path the daemon wrote.
+    """
+    base = os.environ.get("INFERROUTE_RECORD_DIR") or os.environ.get("INFERROUTE_LOG_DIR") or ""
+    return (Path(base) if base else Path.home() / ".inferroute") / "sessions"
+
+
+def _strip_command(prefix: str, cost_file: Path | None = None) -> dict:
+    """A CC statusLine `command` dict that prints the strip + real session cost.
+
+    The static strip (model · lane │ link │ ↻ hint) is known at launch, so it's a
+    plain `printf` of `prefix` — dependency-free, no per-render subprocess, and it
+    ignores the session JSON CC pipes on stdin.
+
+    Cost is the REAL inferroute figure, not CC's. We deliberately do NOT use CC's
+    `cost.total_cost_usd` from stdin: CC prices with its own built-in rates for the
+    model id, and our routed models (kimi/glm/… via the proxy) are far cheaper than
+    whatever CC assumes for a non-Anthropic id, so that number runs several times
+    high — exactly wrong on a cost-savings product. Instead, the on-device recorder
+    daemon captures the server-computed `usage.cost` off each response (the same
+    number the dashboard bills) and keeps a per-session running total in a tiny
+    local file (`<record_dir>/sessions/<session_id>.cost`, full-precision USD). The
+    status line just reads that file — local, no network — and printf-formats it to
+    cents. When the daemon isn't running (no file) the strip is simply the static
+    two lines; cost appears once the first turn settles. The `|| true` keeps the
+    command's exit status 0 even on a malformed/again-empty read, so CC still
+    renders the line (it only displays stdout when the command exits 0).
+
+    Cost lands last on the final line, so it's the first thing CC's width-clip drops.
+    """
+    import shlex
+
+    command = "printf '%s' " + shlex.quote(prefix)
+    if cost_file is not None:
+        cf = shlex.quote(str(cost_file))
+        command += (
+            f"; if [ -s {cf} ]; then "
+            f"printf ' │ $%.2f' \"$(cat {cf} 2>/dev/null)\" 2>/dev/null || true; fi"
+        )
+    return {"type": "command", "command": command}
+
+
+def _product_strip_settings_args(
+    prefix: str, extra_args: list[str], cost_file: Path | None = None
+) -> list[str]:
+    """`['--settings', <json>]` pinning the product strip to CC's status line, or [].
+
+    Claude Code's fullscreen TUI (alt-screen — the DEFAULT in CC 2.1.170, mode
+    `ant_default`) hides anything printed before launch, and the inline renderer
+    eventually scrolls it away. So neither the pre-launch banner nor a post-session
+    print (impossible anyway: we `execvp` claude and the ir process is replaced)
+    can durably surface ir's session info. A statusLine is rendered BY claude
+    INSIDE the TUI, so it survives fullscreen and stays pinned for the whole
+    session in BOTH render modes.
 
     We inject it via `--settings` (a per-invocation layer; no temp files, no
     polluting the user's repo with a .claude/settings.json). Because that layer
@@ -155,7 +320,6 @@ def _statusline_settings_args(
       * the user already has a statusLine configured (don't clobber it).
     """
     import json
-    import shlex
 
     if os.environ.get("IR_NO_STATUSLINE", "").strip().lower() in ("1", "true", "yes"):
         return []
@@ -164,16 +328,45 @@ def _statusline_settings_args(
     if _user_has_statusline():
         return []
 
-    url = _session_url(api_url, session_id)
-    tag = "⚡ inferroute economy" if economy else "inferroute"
-    line = f"{tag} · {url}"
-    # CC runs this command in a shell each render cycle and shows its stdout.
-    # printf ignores the session JSON piped on stdin; shlex.quote makes `line`
-    # a single safe shell token. os.execvpe passes the JSON as one argv element
-    # (no shell), so only the inner command needs shell-escaping.
-    command = "printf '%s' " + shlex.quote(line)
-    settings = {"statusLine": {"type": "command", "command": command}}
+    settings = {"statusLine": _strip_command(prefix, cost_file)}
     return ["--settings", json.dumps(settings)]
+
+
+def _gate_strip_prefix(
+    api_url: str, session_id: str, model_id: str, economy: bool
+) -> str:
+    """One-line product strip for the gate (inferroute) launch path:
+
+        ⚡ <model> · <lane> │ <dashboard link>      (+ live cost appended)
+
+    Single line by design: a dedicated second line for a relaunch hint
+    (`↻ ir --model …`) wasn't worth the vertical space, and CC gives the
+    statusLine no terminal width, so the hint can't be right-pegged on this line
+    either. The model name in the header already implies how to relaunch. We
+    reverse-map the resolved model_id back to the friendly short (`kimi`, not
+    `moonshotai/Kimi-K2.6-TEE`) for that header; cost is appended last so it's the
+    first thing CC's width-clip drops on a narrow terminal.
+    """
+    from . import models
+
+    short = models.short_for_model_id(model_id) or model_id
+    lane = "economy" if economy else "standard"
+    url = _session_url(api_url, session_id)
+    return f"⚡ {short} · {lane} │ {url}"
+
+
+def _native_strip_prefix(extra_args: list[str]) -> str:
+    """One-line product strip for the native (`ir anthropic`) launch path:
+
+        ⚡ <model> · native
+
+    No dashboard link (native deliberately doesn't route through inferroute, so
+    there's no minted session) and no cost (no daemon in the path). `<model>` is
+    the verbatim `--model` value the user passed, if any, else `claude`.
+    """
+    model = _model_for_statusline(extra_args)
+    head = model or "claude"
+    return f"⚡ {head} · native"
 
 
 def _print_economy_banner() -> None:
@@ -256,8 +449,19 @@ def launch_through_inferroute(
     creds: Credentials,
     extra_args: Iterable[str] = (),
     permission_mode: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Exec `claude` with inferroute env + --model pinned.
+
+    `session_id` ties this launch to one inferroute session (dashboard link +
+    cost file + the `x-inferroute-session` tag on every request):
+      * None (a FRESH launch) → mint a new id AND pass it to claude as
+        `--session-id`, so Claude Code's own session id EQUALS the inferroute id.
+        That single shared id is what lets a later resume be cumulative.
+      * given (a RESUME, from resume.py) → reuse that id and do NOT pass
+        `--session-id` (the caller already put `--resume <id>` in extra_args).
+        Tagging with the original id makes the resumed turns land on the same
+        dashboard session and keep climbing the same cost file.
 
     Auth strategy:
       * ANTHROPIC_BASE_URL  → inferroute (so chat traffic routes here)
@@ -339,7 +543,9 @@ def launch_through_inferroute(
     # request — including background "haiku" chores — merged with auth headers.
     # MERGE with any value the user already set (newline-separated) rather than
     # clobbering it.
-    session_id = uuid.uuid4().hex
+    resuming = session_id is not None
+    if session_id is None:
+        session_id = _new_session_id()
     _headers = []
     _existing = env.get("ANTHROPIC_CUSTOM_HEADERS", "").strip()
     if _existing:
@@ -376,8 +582,20 @@ def launch_through_inferroute(
     if economy:
         _print_economy_banner()
 
-    # Print the dashboard link BEFORE handing the terminal to claude.
-    _print_session_link(creds.api_url, session_id)
+    # Persist the dashboard link for `ir status` / copy-paste. It's shown to the
+    # user via the status line (pinned for the whole session), not printed here.
+    _persist_session_link(creds.api_url, session_id)
+
+    # Remember this model so a later `ir --resume` can reuse it without the
+    # picker (matching `claude --resume`, which never asks for a model).
+    _persist_last_model(model_id)
+
+    # On a fresh launch, record this session in the ir index (id → model/lane/cwd)
+    # so `ir --resume`'s menu can list YOUR inferroute sessions distinctly from
+    # plain-claude ones and resume them on their original model. (Resumes reuse an
+    # existing id, already indexed, so only fresh launches add an entry.)
+    if not resuming:
+        _record_launch(session_id, model_id, "economy" if economy else "standard")
 
     # A caller-supplied --permission-mode (the `permission_mode` param OR a passthrough
     # --permission-mode on the CLI) means the caller governs permissions, so we must NOT
@@ -386,16 +604,34 @@ def launch_through_inferroute(
     # agents that pass no allow-list don't stall on prompts. (See _resolve_flags.)
     extra = list(extra_args)
     flags = _resolve_flags(permission_mode, extra)
-    # Pin the session link to CC's status line so it stays visible for the whole
-    # session (the pre-launch banner above is hidden by CC's fullscreen TUI and
-    # scrolls away in the inline renderer). No-ops if the user has their own
+    # Pin the product strip (⚡ model · lane │ link │ $cost) to CC's status line
+    # so it stays visible for the whole session — the pre-launch banner above is
+    # hidden by CC's fullscreen TUI (the DEFAULT in 2.1.170) and scrolls away in
+    # the inline renderer. No-ops if the user has their own
     # statusLine / --settings, or set IR_NO_STATUSLINE.
-    status_args = _statusline_settings_args(creds.api_url, session_id, economy, extra)
+    prefix = _gate_strip_prefix(creds.api_url, session_id, model_id, economy)
+    # The on-device recorder daemon (when running) writes this session's real
+    # cumulative cost here; the status line reads it. No-ops gracefully if the
+    # daemon isn't running (file never appears) — see _strip_command.
+    cost_file = _record_sessions_dir() / f"{session_id}.cost"
+    status_args = _product_strip_settings_args(prefix, extra, cost_file)
+    # On a fresh launch, force claude's session id to equal our session_id so the
+    # transcript, the dashboard link, and the cost file share one id (the basis
+    # for cumulative resume). Skip when resuming (extra already has `--resume
+    # <id>`) or when the user manages the id/resume themselves.
+    sid_args: list[str] = []
+    if (
+        not resuming
+        and not any(a == "--session-id" or a.startswith("--session-id=") for a in extra)
+        and not _argv_has_resume(extra)
+    ):
+        sid_args = ["--session-id", session_id]
     argv = [
         binary,
         *flags,
         "--model", model_id,
         *status_args,
+        *sid_args,
         *extra,
     ]
     # execvpe replaces the current process — claude inherits our terminal.
@@ -407,7 +643,14 @@ def launch_native_anthropic(extra_args: Iterable[str] = ()) -> None:
 
     Whatever the user has set globally is what runs. If they're not
     authenticated, claude itself will tell them.
+
+    Still gets the product strip (sans dashboard link — native doesn't route
+    through inferroute, so there's no session to link). The relaunch hint here is
+    `ir anthropic [--model X]`, which is the piece a user otherwise loses under
+    the fullscreen TUI. Same backoff as the gate path.
     """
     binary = _require_claude_binary()
-    argv = [binary, *_DEFAULT_FLAGS, *list(extra_args)]
+    extra = list(extra_args)
+    status_args = _product_strip_settings_args(_native_strip_prefix(extra), extra)
+    argv = [binary, *_DEFAULT_FLAGS, *status_args, *extra]
     os.execvp(binary, argv)
